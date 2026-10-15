@@ -66,3 +66,34 @@ kbd{display:inline-block;padding:2px 5px;border:1px solid #3a4c5b;border-radius:
 .library-item-actions button{padding:9px 12px;font-size:10px;justify-content:center}
 .library-delete{color:#ffb8c1;border-color:#603942}
 @media(max-width:600px){.library-item{align-items:stretch;flex-direction:column}.library-item-actions>*{flex:1}.library-item-actions{width:100%}}
+
+/* Jamloom 0.3.0 — library-first practice workspace */
+.shell{max-width:1040px;padding-top:38px}
+.library-title-row{align-items:center}
+.library-title-row .heading-copy{flex:1;min-width:0}
+.library-title-row>button{flex-shrink:0;white-space:nowrap}
+.library-tools{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:12px;margin:-4px 0 14px}
+.library-tools label{min-width:0}
+.library-tools input,.library-tools select{width:100%;background:#0b121a;border:1px solid #2c3b49;color:#e9f1f7;border-radius:9px;padding:11px 12px;font:inherit;font-size:12px;min-width:0}
+.library-search-label,.library-sort-label{gap:7px!important}
+.library-status{margin-bottom:12px}
+.library-item{background:linear-gradient(110deg,#101c27,#0b121a);padding:14px 15px}
+.library-item-details{flex:1;gap:5px}
+.library-item-details strong{font-size:14px;letter-spacing:-.15px}
+.library-item-details .library-artist{color:#c0d4df;font-size:11px}
+.library-item-details span:last-child{font-size:10px}
+.library-item-actions{gap:7px}
+.library-item-actions button{white-space:nowrap}
+.library-no-results{padding:18px;color:var(--muted);font-size:12px;text-align:center}
+.mixer-panel{border-color:#31565d;background:linear-gradient(145deg,#111e29f5,#0c151ef5);min-height:230px}
+.mixer-empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;min-height:150px;text-align:center;padding:22px;border:1px dashed #2c4653;border-radius:12px;background:#0b131b}
+.mixer-empty-state .empty-icon{font-size:30px;line-height:1;color:var(--cyan)}
+.mixer-empty-state strong{font-size:14px;color:#dceaf2}
+.mixer-empty-state span:last-child{font-size:12px;color:var(--muted)}
+.separator-panel{border-color:#31565d}
+.separator-panel>.section-heading{align-items:center}
+.separator-panel>.section-heading>div{flex:1}
+.separator-panel>.section-heading>button{flex-shrink:0}
+#job-progress{margin:4px 0 16px}
+#job-message{overflow-wrap:anywhere}
+@media(max-width:650px){.shell{padding:26px 14px 20px}.library-title-row{flex-wrap:wrap;align-items:flex-start}.library-title-row>button{width:100%;justify-content:center}.library-tools{grid-template-columns:1fr}.library-item-actions{flex-wrap:wrap}.library-item-actions button{flex:1}.separator-panel>.section-heading{flex-wrap:wrap}.separator-panel>.section-heading>button{margin-left:45px}}

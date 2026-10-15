@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Jamloom — play your part</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.2.8.1">
+  <link rel="stylesheet" href="/static/style.css?v=0.3.1">
 </head>
 <body>
   <main class="shell">
@@ -15,14 +15,17 @@
     </header>
 
     <section class="panel library-panel" aria-labelledby="library-heading">
-      <div class="section-heading"><span class="step">01</span><div><h2 id="library-heading">Your library</h2><p>Processed songs are stored on this server and shared by everyone using this Jamloom instance.</p></div></div>
+      <div class="section-heading library-title-row"><span class="step">01</span><div class="heading-copy"><h2 id="library-heading">Your library</h2><p>Choose a song to practise, or prepare a new backing track.</p></div><button id="show-separator" type="button">+ Create backing track</button></div>
+      <div class="library-tools"><label class="library-search-label">Search library<input id="library-search" type="search" placeholder="Title, artist or album…" autocomplete="off"></label><label class="library-sort-label">Sort by<select id="library-sort"><option value="recent">Recently added</option><option value="title">Title</option><option value="artist">Artist</option><option value="album">Album</option><option value="duration">Duration</option></select></label></div>
       <div id="library-status" class="library-status" role="status">Loading your library…</div>
       <div id="library-list" class="library-list"></div>
-      <p class="hint">Practice settings are remembered in this browser. The song files themselves are shared on disk.</p>
+      <p class="hint">Practice settings are remembered in this browser. Song files and metadata are shared by everyone using this Jamloom instance.</p>
     </section>
 
-    <section class="panel">
-      <div class="section-heading"><span class="step">02</span><div><h2>Choose a track</h2><p>Audio is processed locally on this machine.</p></div></div>
+    <section class="panel separator-panel" id="separator-panel" hidden>
+      <div class="section-heading"><span class="step">03</span><div><h2>Create backing track</h2><p>Choose a song and separate it into stems. Processing runs locally on this machine.</p></div><button id="hide-separator" class="button ghost" type="button">Cancel</button></div>
+      <div class="progress-track" id="job-progress" hidden><div id="progress-bar"></div></div>
+      <div id="error-box" class="error" hidden></div>
       <form id="upload-form">
         <label class="drop-zone" id="drop-zone" for="audio-file">
           <span class="upload-icon">↑</span><strong id="file-label">Drop an audio file here</strong><span>or click to browse · MP3, WAV, FLAC, M4A, OGG</span>
@@ -41,10 +44,9 @@
       </form>
     </section>
 
-    <section class="panel result-panel" id="result-panel" hidden>
-      <div class="section-heading"><span class="step">03</span><div><h2>Your backing track</h2><p id="job-message">Preparing your track…</p></div></div>
-      <div class="progress-track"><div id="progress-bar"></div></div>
-      <div id="error-box" class="error" hidden></div>
+    <section class="panel result-panel mixer-panel" id="result-panel" aria-labelledby="mixer-page-heading">
+      <div class="section-heading"><span class="step">02</span><div><h2 id="mixer-page-heading">Mixer</h2><p id="job-message">Select a song in your library to resume practising.</p></div></div>
+      <div id="mixer-empty-state" class="mixer-empty-state"><span class="empty-icon">♫</span><strong>Your next jam starts here</strong><span>Open a song from your library, or create a new backing track above.</span></div>
       <div id="player-area" hidden>
         <div class="track-title"><span class="equalizer">▥</span><div><strong id="result-filename">Backing track</strong><span>WAV · mixed stems</span></div></div>
         <audio id="audio-player" controls preload="metadata"></audio>
@@ -132,8 +134,8 @@
         <p class="hint">This is coordination groundwork: it broadcasts shared playback state between connected browsers. It does not yet stream microphones or automatically synchronise the audio element.</p>
       </div>
     </section>
-    <footer><span>JAMLOOM <span class="version">0.2.8.1</span></span><span>Local prototype · Powered by Demucs</span></footer>
+    <footer><span>JAMLOOM <span class="version">0.3.0</span></span><span>Local prototype · Powered by Demucs</span></footer>
   </main>
-  <script src="/static/app.js?v=0.2.8.1"></script>
+  <script src="/static/app.js?v=0.3.1"></script>
 </body>
 </html>

@@ -6,11 +6,12 @@ import subprocess
 import threading
 import uuid
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -33,7 +34,7 @@ MODELS = {
     "htdemucs_6s": {"vocals", "drums", "bass", "guitar", "piano", "other"},
 }
 
-app = FastAPI(title="Jamloom", version="0.2.8.1")
+app = FastAPI(title="Jamloom", version="0.3.1")
 app.include_router(sessions_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -54,6 +55,8 @@ def public_track(metadata: dict[str, Any]) -> dict[str, Any]:
     stems = metadata.get("stems") or sorted(MODELS.get(model, set()))
     return {
         **metadata,
+        "bpm": metadata.get("bpm"),
+        "time_signature": metadata.get("time_signature", ""),
         "status": "completed",
         "progress": "Ready in your library.",
         "backing_url": f"/api/jobs/{track_id}/backing",
@@ -83,6 +86,11 @@ def write_track_metadata(track_id: str, filename: str, model: str, backing_path:
     metadata = {
         "id": track_id,
         "filename": filename,
+        "title": Path(filename).stem or "Untitled track",
+        "artist": "",
+        "album": "",
+        "bpm": None,
+        "time_signature": "",
         "model": model,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "duration": round(float(info.duration), 3),
@@ -286,6 +294,50 @@ async def list_library():
         tracks = [dict(job) for job in jobs.values() if job.get("status") == "completed" and job.get("library_id", job.get("id")) == job.get("id")]
     tracks.sort(key=lambda track: track.get("created_at", ""), reverse=True)
     return {"tracks": tracks, "count": len(tracks)}
+
+
+@app.patch("/api/library/{track_id}")
+async def update_library_track(track_id: str, payload: dict[str, Any] = Body(...)):
+    if not track_id or any(ch not in "0123456789abcdef" for ch in track_id.lower()):
+        raise HTTPException(400, "Invalid library track ID.")
+    allowed = {"title", "artist", "album", "bpm", "time_signature"}
+    if not payload or set(payload) - allowed:
+        raise HTTPException(400, "Editable fields are title, artist, album, BPM and time signature.")
+    if "bpm" in payload:
+        bpm = payload["bpm"]
+        if bpm is not None and (isinstance(bpm, bool) or not isinstance(bpm, (int, float)) or not 1 <= bpm <= 400):
+            raise HTTPException(400, "BPM must be between 1 and 400, or empty.")
+    if "time_signature" in payload:
+        signature = payload["time_signature"]
+        if not isinstance(signature, str):
+            raise HTTPException(400, "Time signature must be text.")
+        signature = " ".join(signature.split())
+        if signature and not re.fullmatch(r"(?:[1-9]|1[0-6])\s*/\s*(?:1|2|4|8|16)", signature):
+            raise HTTPException(400, "Time signature must look like 4/4, 3/4 or 6/8 (numerator 1–16; denominator 1, 2, 4, 8 or 16).")
+    path = LIBRARY_DIR / track_id
+    with jobs_lock:
+        job = jobs.get(track_id)
+        if not job or job.get("status") != "completed" or not path.is_dir():
+            raise HTTPException(404, "Library track not found.")
+        metadata_path = path / "track.json"
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            metadata = {key: job.get(key) for key in ("id", "filename", "model", "created_at", "duration", "sample_rate", "stems")}
+        for key, value in payload.items():
+            if key == "bpm":
+                metadata[key] = round(float(value), 2) if value is not None else None
+            elif key == "time_signature":
+                metadata[key] = re.sub(r"\s*/\s*", "/", " ".join(value.split()))[:12]
+            else:
+                if not isinstance(value, str):
+                    raise HTTPException(400, f"{key} must be text.")
+                metadata[key] = " ".join(value.split())[:160]
+        temporary = metadata_path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        temporary.replace(metadata_path)
+        job.update({key: metadata.get(key, "") for key in allowed})
+    return {"track": dict(job)}
 
 
 @app.delete("/api/library/{track_id}")

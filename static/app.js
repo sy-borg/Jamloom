@@ -41,6 +41,14 @@ const metronomeEffectiveBpm = document.querySelector('#metronome-effective-bpm')
 const metronomeMessage = document.querySelector('#metronome-message');
 const libraryList = document.querySelector('#library-list');
 const libraryStatus = document.querySelector('#library-status');
+const librarySearch = document.querySelector('#library-search');
+const librarySort = document.querySelector('#library-sort');
+const separatorPanel = document.querySelector('#separator-panel');
+const showSeparatorButton = document.querySelector('#show-separator');
+const hideSeparatorButton = document.querySelector('#hide-separator');
+const mixerEmptyState = document.querySelector('#mixer-empty-state');
+const jobProgress = document.querySelector('#job-progress');
+let libraryTracks = [];
 let loopStart = null;
 let loopEnd = null;
 let loopEnabled = false;
@@ -93,46 +101,86 @@ function formatLibraryDuration(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds)));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
+function renderLibrary() {
+  const query = librarySearch.value.trim().toLocaleLowerCase();
+  const sort = librarySort.value;
+  const tracks = libraryTracks.filter(track => [track.title, track.artist, track.album, track.filename].some(value => String(value || '').toLocaleLowerCase().includes(query)));
+  tracks.sort((a, b) => {
+    if (sort === 'title') return String(a.title || a.filename || '').localeCompare(String(b.title || b.filename || ''), undefined, {sensitivity:'base'});
+    if (sort === 'artist') return String(a.artist || '').localeCompare(String(b.artist || ''), undefined, {sensitivity:'base'}) || String(a.title || a.filename || '').localeCompare(String(b.title || b.filename || ''), undefined, {sensitivity:'base'});
+    if (sort === 'album') return String(a.album || '').localeCompare(String(b.album || ''), undefined, {sensitivity:'base'}) || String(a.title || a.filename || '').localeCompare(String(b.title || b.filename || ''), undefined, {sensitivity:'base'});
+    if (sort === 'duration') return Number(b.duration || 0) - Number(a.duration || 0);
+    return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  });
+  libraryList.replaceChildren();
+  if (!libraryTracks.length) { libraryStatus.textContent = 'Your library is empty. Create a backing track to get started.'; return; }
+  libraryStatus.textContent = `${tracks.length} of ${libraryTracks.length} song${libraryTracks.length === 1 ? '' : 's'} shown · available to everyone using this Jamloom instance.`;
+  if (!tracks.length) { const empty = document.createElement('p'); empty.className = 'library-no-results'; empty.textContent = 'No songs match that search.'; libraryList.append(empty); return; }
+  for (const track of tracks) {
+    const row = document.createElement('article'); row.className = 'library-item';
+    const details = document.createElement('div'); details.className = 'library-item-details';
+    const title = document.createElement('strong'); title.textContent = track.title || (track.filename || 'Untitled track').replace(/\.[^.]+$/, '');
+    const artist = document.createElement('span'); artist.className = 'library-artist'; artist.textContent = [track.artist, track.album].filter(Boolean).join(' · ') || 'Artist and album not set';
+    const meta = document.createElement('span');
+    const date = track.created_at ? new Date(track.created_at).toLocaleDateString() : 'Saved';
+    const model = track.model === 'htdemucs_6s' ? '6 stems' : '4 stems';
+    const musicInfo = [track.bpm ? `${Number(track.bpm)} BPM` : '', track.time_signature || ''].filter(Boolean).join(' · ');
+    meta.textContent = [formatLibraryDuration(track.duration), model, musicInfo, date].filter(Boolean).join(' · ');
+    details.append(title, artist, meta);
+    const actions = document.createElement('div'); actions.className = 'library-item-actions';
+    const open = document.createElement('button'); open.type = 'button'; open.className = 'button secondary'; open.textContent = 'Open mixer';
+    open.addEventListener('click', () => loadLibraryTrack(track.id));
+    const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'button ghost'; edit.textContent = 'Edit details';
+    edit.addEventListener('click', async () => {
+      const nextTitle = window.prompt('Track title:', track.title || (track.filename || '').replace(/\.[^.]+$/, '')); if (nextTitle === null) return;
+      const nextArtist = window.prompt('Artist:', track.artist || ''); if (nextArtist === null) return;
+      const nextAlbum = window.prompt('Album:', track.album || ''); if (nextAlbum === null) return;
+      const nextBpmText = window.prompt('Track BPM (leave empty if unknown):', track.bpm == null ? '' : String(track.bpm)); if (nextBpmText === null) return;
+      const nextBpm = nextBpmText.trim() === '' ? null : Number(nextBpmText);
+      if (nextBpm !== null && (!Number.isFinite(nextBpm) || nextBpm < 1 || nextBpm > 400)) { libraryStatus.textContent = 'BPM must be a number between 1 and 400, or left empty.'; return; }
+      const nextSignature = window.prompt('Time signature (e.g. 4/4, 3/4, 6/8; leave empty if unknown):', track.time_signature || ''); if (nextSignature === null) return;
+      if (nextSignature.trim() && !/^(?:[1-9]|1[0-6])\s*\/\s*(?:1|2|4|8|16)$/.test(nextSignature.trim())) { libraryStatus.textContent = 'Use a time signature such as 4/4, 3/4 or 6/8 (numerator 1–16; denominator 1, 2, 4, 8 or 16).'; return; }
+      edit.disabled = true;
+      try {
+        const res = await fetch(`/api/library/${encodeURIComponent(track.id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title:nextTitle, artist:nextArtist, album:nextAlbum, bpm:nextBpm, time_signature:nextSignature.trim()})});
+        const result = await res.json(); if (!res.ok) throw new Error(result.detail || 'Could not update track details.');
+        await loadLibrary();
+        if (currentJobId === track.id) document.querySelector('#result-filename').textContent = result.track.title || result.track.filename || 'Backing track';
+      } catch (err) { libraryStatus.textContent = err.message; edit.disabled = false; }
+    });
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button ghost library-delete'; remove.textContent = 'Delete';
+    remove.addEventListener('click', async () => {
+      if (!window.confirm(`Delete “${track.title || track.filename || 'this track'}” and its separated audio from the shared library? This cannot be undone.`)) return;
+      remove.disabled = true;
+      try { const res = await fetch(`/api/library/${encodeURIComponent(track.id)}`, {method:'DELETE'}); const result = await res.json(); if (!res.ok) throw new Error(result.detail || 'Delete failed.');
+        if (currentJobId === track.id) { audioPlayer.pause(); stopMetronome(); stopStemPlayers(); playerArea.hidden = true; mixerEmptyState.hidden = false; currentJobId = null; }
+        try { localStorage.removeItem(settingsKey(track.id)); } catch {}
+        await loadLibrary();
+      } catch (err) { libraryStatus.textContent = err.message; remove.disabled = false; }
+    });
+    actions.append(open, edit, remove); row.append(details, actions); libraryList.append(row);
+  }
+}
 async function loadLibrary() {
   try {
     const response = await fetch('/api/library'); const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Could not load library.');
-    libraryList.replaceChildren();
-    if (!data.tracks.length) { libraryStatus.textContent = 'No processed songs yet. Generate a backing track below and it will appear here.'; return; }
-    libraryStatus.textContent = `${data.count} processed song${data.count === 1 ? '' : 's'} available on this server.`;
-    for (const track of data.tracks) {
-      const row = document.createElement('article'); row.className = 'library-item';
-      const details = document.createElement('div'); details.className = 'library-item-details';
-      const title = document.createElement('strong'); title.textContent = track.filename || 'Untitled track';
-      const meta = document.createElement('span');
-      const date = track.created_at ? new Date(track.created_at).toLocaleDateString() : 'Saved';
-      const model = track.model === 'htdemucs_6s' ? '6 stems' : '4 stems';
-      meta.textContent = `${formatLibraryDuration(track.duration)} · ${model} · ${date}`;
-      details.append(title, meta);
-      const actions = document.createElement('div'); actions.className = 'library-item-actions';
-      const open = document.createElement('button'); open.type = 'button'; open.className = 'button secondary'; open.textContent = 'Open';
-      open.addEventListener('click', () => loadLibraryTrack(track.id));
-      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button ghost library-delete'; remove.textContent = 'Delete';
-      remove.addEventListener('click', async () => {
-        if (!window.confirm(`Delete “${track.filename || 'this track'}” and its separated audio from the shared library? This cannot be undone.`)) return;
-        remove.disabled = true;
-        try { const res = await fetch(`/api/library/${encodeURIComponent(track.id)}`, {method:'DELETE'}); const result = await res.json(); if (!res.ok) throw new Error(result.detail || 'Delete failed.');
-          if (currentJobId === track.id) { audioPlayer.pause(); stopMetronome(); stopStemPlayers(); playerArea.hidden = true; currentJobId = null; }
-          try { localStorage.removeItem(settingsKey(track.id)); } catch {}
-          await loadLibrary();
-        } catch (err) { libraryStatus.textContent = err.message; remove.disabled = false; }
-      });
-      actions.append(open, remove); row.append(details, actions); libraryList.append(row);
-    }
+    libraryTracks = data.tracks || [];
+    renderLibrary();
   } catch (err) { libraryStatus.textContent = `Library could not be loaded: ${err.message}`; }
 }
+librarySearch.addEventListener('input', renderLibrary);
+librarySort.addEventListener('change', renderLibrary);
+showSeparatorButton.addEventListener('click', () => { separatorPanel.hidden = false; separatorPanel.scrollIntoView({behavior:'smooth', block:'start'}); });
+hideSeparatorButton.addEventListener('click', () => { if (pollTimer || submitButton.disabled) return; separatorPanel.hidden = true; errorBox.hidden = true; });
+
 async function loadLibraryTrack(trackId) {
   try {
     const response = await fetch('/api/library'); const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Could not read library.');
     const track = data.tracks.find(item => item.id === trackId);
     if (!track) throw new Error('This track is no longer in the library.');
-    resultPanel.hidden = false; errorBox.hidden = true;
+    errorBox.hidden = true;
     loadCompletedTrack(track, true);
     resultPanel.scrollIntoView({behavior:'smooth', block:'start'});
   } catch (err) { libraryStatus.textContent = err.message; }
@@ -596,15 +644,16 @@ document.addEventListener('keydown', event => {
 function loadCompletedTrack(job, fromLibrary = false) {
   audioPlayer.pause(); stopMetronome(); stopStemPlayers();
   metronomeMuted = false; metronomeBpmInput = null; metronomeLevelInput = null; metronomeLevelValue = null; metronomeMuteButton = null; metronomeSoloButton = null;
-  playerArea.hidden = false; currentJobId = job.id;
-  document.querySelector('#result-filename').textContent = job.filename || 'Backing track';
+  playerArea.hidden = false; mixerEmptyState.hidden = true; separatorPanel.hidden = true; jobProgress.hidden = true; currentJobId = job.id;
+  document.querySelector('#result-filename').textContent = job.title || (job.filename || 'Backing track').replace(/\.[^.]+$/, '');
   audioPlayer.src = job.backing_url; audioPlayer.volume = masterGain(); audioPlayer.playbackRate = 1; speedSelect.value = '1';
   loopStart = null; loopEnd = null; loopEnabled = false; updateLoopUI(); updateTimeDisplay();
+  sourceBpmInput.value = job.bpm == null ? '' : String(job.bpm);
   downloadLink.href = job.download_url; currentStems = job.stems || {};
   mixerModelLabel.textContent = job.model === 'htdemucs_6s' ? '6 stems · vocals, drums, bass, guitar, piano, other' : '4 stems · vocals, drums, bass, other';
   renderStems(currentStems);
   restoreTrackSettings(job.id);
-  jobMessage.textContent = fromLibrary ? 'Loaded from your library.' : 'Saved to your library.';
+  jobMessage.textContent = `${job.title || (job.filename || 'Track').replace(/\.[^.]+$/, '')}${job.artist ? ' · ' + job.artist : ''}${fromLibrary ? ' · Loaded from your library' : ' · Saved to your library'}`;
   setProgress('completed');
   submitButton.disabled = false; submitButton.querySelector('span:first-child').textContent = 'Generate another backing track';
 }
@@ -615,6 +664,7 @@ async function pollJob(id) {
     const job = await response.json();
     if (!response.ok) throw new Error(job.detail || 'Could not read job status.');
     jobMessage.textContent = job.progress || job.status;
+    jobProgress.hidden = false;
     setProgress(job.status);
     if (job.status === 'completed') {
       clearInterval(pollTimer); pollTimer = null;
@@ -635,10 +685,10 @@ form.addEventListener('submit', async e => {
   e.preventDefault();
   if (!fileInput.files.length) return;
   if (pollTimer) clearInterval(pollTimer);
-  resultPanel.hidden = false; errorBox.hidden = true; playerArea.hidden = true;
+  separatorPanel.hidden = false; errorBox.hidden = true; jobProgress.hidden = false; mixerEmptyState.hidden = false; playerArea.hidden = true; currentJobId = null;
   audioPlayer.pause(); stopMetronome(); audioPlayer.muted = false; audioPlayer.removeAttribute('src'); audioPlayer.load();
   stopStemPlayers(); mixerMode = false; soloedStem = null; stemsList.hidden = false; stemsToggle.textContent = 'Use backing mix';
-  jobMessage.textContent = 'Uploading audio…'; progressBar.style.width = '3%';
+  jobMessage.textContent = 'Preparing your new track…'; progressBar.style.width = '3%';
   submitButton.disabled = true; submitButton.querySelector('span:first-child').textContent = 'Processing…';
   const data = new FormData(form);
   try {

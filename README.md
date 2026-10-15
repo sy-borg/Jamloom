@@ -1,9 +1,10 @@
-# Jamloom MVP 0.2.8.1
+# Jamloom 0.3.1
 
 A local-first AI music practice prototype. Upload a track, use Demucs to separate instruments, and play along with a backing track. The prototype also includes a first **session coordination server** for invite-code rooms and shared playback state.
 
 ## Current capabilities
 
+- Library-first practice workspace: the shared song library and mixer are the main page; the separator opens only when creating a new backing track.
 - Browser UI for audio upload and Demucs separation.
 - Four-stem (`htdemucs`) and experimental six-stem (`htdemucs_6s`) models. The selected model determines how many instruments appear in the mixer; all stems are included in the generated full mix.
 - Backing-track playback and WAV download, plus individual stem downloads. Practice controls include ±5-second navigation, A/B section looping, selectable playback speed, and BPM-based speed calculation. Playback-rate adjustment preserves pitch in supported browsers.
@@ -71,7 +72,7 @@ The server provides a shared state clock (`state.updated_at`) in Unix seconds. A
 - Participant tokens are bearer secrets. Anyone with a participant token can read and update that session's shared state. Don't log or share tokens.
 - There is no user account system, rate limiting, session expiry, persistent store, or production-grade abuse protection.
 - Session coordination does not transport live instrument audio. A future live-jam feature will need dedicated low-latency media transport and careful latency testing; the current HTTP/WebSocket server is not sufficient by itself.
-- The shared song library is persisted under `data/library/` (or `$JAMLOOM_DATA/library/`) and restored when the server restarts. Practice settings are saved per track in the browser local storage, so they are specific to that browser profile.
+- The shared song library is persisted under `data/library/` (or `$JAMLOOM_DATA/library/`) and restored when the server restarts. Track title, artist and album metadata can be edited and are shared on the server. Library search and sorting are available. Practice settings are saved per track in browser local storage, so they are specific to that browser profile.
 - Verify model-weight licensing and copyright requirements before offering a commercial hosted service.
 
 
@@ -107,3 +108,14 @@ Polishes the practice mixer with a master-volume control (default 75% for extra 
 ## Jamloom 0.2.8.1
 
 Bugfix release: avoid passing `status` twice when a separation completes and the resulting track is added to the persistent library.
+
+
+## Jamloom 0.3.1
+
+- Reorganises the home screen around the shared library and practice mixer.
+- Adds library search and sorting by recently added, title, artist, album, or duration.
+- Adds editable title, artist, and album metadata; this metadata is stored with the library track and shared across browsers.
+- The separator is hidden until **Create backing track** is selected. Successful processing saves the track and opens it in the mixer. Existing library audio and browser-local practice settings are retained.
+
+
+Jamloom 0.3.1 adds editable BPM and time-signature metadata to library tracks. When a track has a BPM, it pre-fills the Original BPM field in the tempo controls. Values remain manually editable; automatic detection is planned for a future release.
