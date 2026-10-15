@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>StemForge — backing tracks from your music</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div class="mark">SF</div>
+      <div><p class="eyebrow">LOCAL AUDIO WORKSHOP</p><h1>StemForge</h1><p class="lede">Turn your own songs into backing tracks.</p></div>
+    </header>
+
+    <section class="panel">
+      <div class="section-heading"><span class="step">01</span><div><h2>Choose a track</h2><p>Audio is processed locally on this machine.</p></div></div>
+      <form id="upload-form">
+        <label class="drop-zone" id="drop-zone" for="audio-file">
+          <span class="upload-icon">↑</span><strong id="file-label">Drop an audio file here</strong><span>or click to browse · MP3, WAV, FLAC, M4A, OGG</span>
+          <input id="audio-file" name="file" type="file" accept="audio/*,.flac,.aiff,.aif,.wma" required>
+        </label>
+        <div class="form-grid">
+          <label>Separation quality
+            <select name="model" id="model">
+              <option value="htdemucs">4 stems · faster, general-purpose</option>
+              <option value="htdemucs_6s">6 stems · includes guitar & piano (experimental)</option>
+            </select>
+          </label>
+          <label>Instrument to remove
+            <select name="exclude" id="exclude"></select>
+          </label>
+        </div>
+        <button id="submit-button" type="submit"><span>Generate backing track</span><span aria-hidden="true">↗</span></button>
+        <p class="hint">Separation can take several minutes. The first run may download the model weights.</p>
+      </form>
+    </section>
+
+    <section class="panel result-panel" id="result-panel" hidden>
+      <div class="section-heading"><span class="step">02</span><div><h2>Your backing track</h2><p id="job-message">Preparing your track…</p></div></div>
+      <div class="progress-track"><div id="progress-bar"></div></div>
+      <div id="error-box" class="error" hidden></div>
+      <div id="player-area" hidden>
+        <div class="track-title"><span class="equalizer">▥</span><div><strong id="result-filename">Backing track</strong><span>WAV · mixed stems</span></div></div>
+        <audio id="audio-player" controls preload="metadata"></audio>
+        <div class="result-actions"><a id="download-link" class="button secondary" href="#">Download WAV ↓</a><button id="stems-toggle" class="button ghost" type="button">Show individual stems</button></div>
+        <div id="stems-list" class="stems-list" hidden></div>
+      </div>
+    </section>
+    <footer><span>STEMFORGE <span class="version">0.1.0</span></span><span>Local prototype · Powered by Demucs</span></footer>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
