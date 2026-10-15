@@ -32,6 +32,13 @@ const sourceBpmInput = document.querySelector('#source-bpm');
 const targetBpmInput = document.querySelector('#target-bpm');
 const applyBpmButton = document.querySelector('#apply-bpm');
 const tempoMessage = document.querySelector('#tempo-message');
+let metronomeBpmInput = null;
+let metronomeLevelInput = null;
+let metronomeLevelValue = null;
+let metronomeMuteButton = null;
+let metronomeSoloButton = null;
+const metronomeEffectiveBpm = document.querySelector('#metronome-effective-bpm');
+const metronomeMessage = document.querySelector('#metronome-message');
 let loopStart = null;
 let loopEnd = null;
 let loopEnabled = false;
@@ -41,6 +48,11 @@ let currentJobId = null;
 let mixerMode = false;
 let soloedStem = null;
 const stemPlayers = new Map();
+let metronomeMuted = false;
+let audioContext = null;
+let metronomeTimer = null;
+let nextBeatTime = null;
+let lastMetronomeMediaTime = null;
 
 modelSelect.addEventListener('change', () => {
   mixerModelLabel.textContent = modelSelect.value === 'htdemucs_6s' ? '6 stems · vocals, drums, bass, guitar, piano, other' : '4 stems · vocals, drums, bass, other';
@@ -73,6 +85,7 @@ function syncStemPlayers(force = false) {
       try { player.audio.currentTime = masterTime; } catch {}
     }
     player.audio.playbackRate = audioPlayer.playbackRate;
+    setPitchPreservation(player.audio);
   }
 }
 async function playStemPlayers() {
@@ -82,6 +95,14 @@ async function playStemPlayers() {
   const failed = results.find(result => result.status === 'rejected');
   if (failed) tempoMessage.textContent = `Some stems could not start: ${failed.reason?.message || 'browser playback error'}`;
 }
+function setPitchPreservation(media) {
+  // Native browser time-stretching keeps pitch stable while playbackRate changes.
+  if ('preservesPitch' in media) media.preservesPitch = true;
+  if ('webkitPreservesPitch' in media) media.webkitPreservesPitch = true;
+  if ('mozPreservesPitch' in media) media.mozPreservesPitch = true;
+}
+setPitchPreservation(audioPlayer);
+
 function masterGain() {
   return Number(masterVolume.value) / 100;
 }
@@ -97,6 +118,19 @@ function updateStemAudioLevels() {
     player.row.classList.toggle('stem-muted', player.audio.muted);
     player.row.classList.toggle('stem-soloed', soloedStem === name);
   }
+  const metroSoloMuted = soloedStem !== null && soloedStem !== '__metronome';
+  const metroMuted = metronomeMuted || metroSoloMuted;
+  if (metronomeMuteButton) {
+    metronomeMuteButton.textContent = metronomeMuted ? 'Unmute' : 'Mute';
+    metronomeMuteButton.setAttribute('aria-pressed', String(metronomeMuted));
+  }
+  if (metronomeSoloButton) {
+    metronomeSoloButton.textContent = soloedStem === '__metronome' ? 'Unsolo' : 'Solo';
+    metronomeSoloButton.setAttribute('aria-pressed', String(soloedStem === '__metronome'));
+  }
+  document.querySelector('#metronome-row')?.classList.toggle('stem-muted', metroMuted);
+  document.querySelector('#metronome-row')?.classList.toggle('stem-soloed', soloedStem === '__metronome');
+  updateMetronomeBpmDisplay();
 }
 function setMixerMode(enabled) {
   mixerMode = enabled;
@@ -108,12 +142,12 @@ function setMixerMode(enabled) {
     updateStemAudioLevels();
     syncStemPlayers(true);
     if (!audioPlayer.paused) playStemPlayers();
-    tempoMessage.textContent = 'Stem mixer active. Master volume and instrument levels are applied to the stem mix.';
+    tempoMessage.textContent = 'Stem mixer active. Tempo changes preserve pitch in supported browsers.';
   } else {
     for (const player of stemPlayers.values()) player.audio.pause();
     audioPlayer.muted = false;
     audioPlayer.volume = masterGain();
-    tempoMessage.textContent = 'Backing mix active. Playback speed changes pitch as well as tempo.';
+    tempoMessage.textContent = 'Backing mix active. Tempo changes preserve pitch in supported browsers.';
   }
 }
 function renderStems(stems) {
@@ -132,6 +166,7 @@ function renderStems(stems) {
     info.append(label, value);
     const audio = document.createElement('audio'); audio.preload = 'auto'; audio.src = url; audio.loop = false;
     audio.playbackRate = audioPlayer.playbackRate;
+    setPitchPreservation(audio);
     audio.addEventListener('loadedmetadata', () => { try { audio.currentTime = audioPlayer.currentTime || 0; } catch {} });
     const sliderLabel = document.createElement('label'); sliderLabel.className = 'stem-volume-label';
     sliderLabel.append(document.createTextNode('Level'));
@@ -157,6 +192,7 @@ function renderStems(stems) {
     row.append(info, controls, audio); stemsList.append(row);
     stemPlayers.set(name, {audio, slider, value, mute, solo, row, userMuted: false});
   }
+  renderMetronomeRow();
   stemsList.hidden = false;
   updateStemAudioLevels();
   setMixerMode(true);
@@ -167,6 +203,167 @@ masterVolume.addEventListener('input', () => {
   updateStemAudioLevels();
 });
 masterVolumeValue.textContent = `${masterVolume.value}%`;
+function renderMetronomeRow() {
+  document.querySelector('#metronome-row')?.remove();
+  const row = document.createElement('div');
+  row.id = 'metronome-row';
+  row.className = 'stem-row metronome-row';
+  const info = document.createElement('div');
+  info.className = 'stem-info';
+  const title = document.createElement('strong');
+  title.textContent = 'Metronome';
+  const levelValue = document.createElement('span');
+  levelValue.className = 'stem-level-value';
+  levelValue.id = 'metronome-level-value';
+  levelValue.textContent = '60%';
+  info.append(title, levelValue);
+
+  const controls = document.createElement('div');
+  controls.className = 'stem-controls metronome-controls';
+  const bpmLabel = document.createElement('label');
+  bpmLabel.className = 'metronome-bpm-label';
+  bpmLabel.textContent = 'BPM';
+  const bpmInput = document.createElement('input');
+  bpmInput.id = 'metronome-bpm';
+  bpmInput.type = 'number';
+  bpmInput.min = '30';
+  bpmInput.max = '300';
+  bpmInput.step = '1';
+  bpmInput.value = '120';
+  bpmInput.setAttribute('aria-label', 'Metronome tempo in beats per minute at normal playback speed');
+  bpmLabel.append(bpmInput);
+
+  const volumeLabel = document.createElement('label');
+  volumeLabel.className = 'stem-volume-label';
+  volumeLabel.append(document.createTextNode('Level'));
+  const volume = document.createElement('input');
+  volume.id = 'metronome-level';
+  volume.type = 'range';
+  volume.min = '0'; volume.max = '100'; volume.step = '1'; volume.value = '60';
+  volume.setAttribute('aria-label', 'Metronome volume');
+  volumeLabel.append(volume);
+
+  const mute = document.createElement('button');
+  mute.id = 'metronome-mute'; mute.type = 'button'; mute.className = 'button ghost stem-mute'; mute.textContent = 'Mute'; mute.setAttribute('aria-pressed', 'false');
+  const solo = document.createElement('button');
+  solo.id = 'metronome-solo'; solo.type = 'button'; solo.className = 'button ghost stem-solo'; solo.textContent = 'Solo'; solo.setAttribute('aria-pressed', 'false');
+  controls.append(bpmLabel, volumeLabel, mute, solo);
+  row.append(info, controls);
+  stemsList.append(row);
+  metronomeBpmInput = bpmInput;
+  metronomeLevelInput = volume;
+  metronomeLevelValue = levelValue;
+  metronomeMuteButton = mute;
+  metronomeSoloButton = solo;
+
+  bpmInput.addEventListener('change', () => {
+    const bpm = Number(bpmInput.value);
+    if (!Number.isFinite(bpm) || bpm < 30 || bpm > 300) {
+      bpmInput.setCustomValidity('Enter a BPM between 30 and 300.');
+      bpmInput.reportValidity();
+      bpmInput.value = '120';
+    }
+    bpmInput.setCustomValidity('');
+    resetMetronomeGrid();
+    updateMetronomeBpmDisplay();
+  });
+  volume.addEventListener('input', () => {
+    levelValue.textContent = `${volume.value}%`;
+    updateStemAudioLevels();
+  });
+  mute.addEventListener('click', () => { metronomeMuted = !metronomeMuted; updateStemAudioLevels(); });
+  solo.addEventListener('click', () => { soloedStem = soloedStem === '__metronome' ? null : '__metronome'; updateStemAudioLevels(); });
+  updateMetronomeBpmDisplay();
+}
+
+function updateMetronomeBpmDisplay() {
+  if (!metronomeBpmInput || !metronomeEffectiveBpm) return;
+  const base = Number(metronomeBpmInput.value);
+  if (Number.isFinite(base) && base >= 30 && base <= 300) {
+    metronomeEffectiveBpm.textContent = `${Math.round(base * audioPlayer.playbackRate * 10) / 10} BPM`;
+  } else metronomeEffectiveBpm.textContent = '—';
+}
+
+function resetMetronomeGrid() {
+  const bpm = Number(metronomeBpmInput?.value);
+  if (!Number.isFinite(bpm) || bpm <= 0) return;
+  const beatSeconds = 60 / bpm;
+  const now = audioPlayer.currentTime || 0;
+  const nearestBeat = Math.round(now / beatSeconds) * beatSeconds;
+  nextBeatTime = Math.abs(now - nearestBeat) < 0.08 ? nearestBeat : Math.ceil(now / beatSeconds) * beatSeconds;
+  lastMetronomeMediaTime = now;
+}
+
+async function ensureAudioContext() {
+  if (!audioContext) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) throw new Error('This browser does not support the Web Audio API needed for the metronome.');
+    audioContext = new AudioContextClass();
+  }
+  if (audioContext.state === 'suspended') await audioContext.resume();
+  return audioContext;
+}
+
+function scheduleMetronomeClick(when, beatIndex) {
+  if (!audioContext || metronomeMuted || (soloedStem !== null && soloedStem !== '__metronome')) return;
+  const volume = Number(metronomeLevelInput?.value ?? 60) / 100;
+  const gainValue = masterGain() * volume;
+  if (gainValue <= 0) return;
+  const oscillator = audioContext.createOscillator();
+  const gain = audioContext.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.setValueAtTime(beatIndex % 4 === 0 ? 1320 : 880, when);
+  gain.gain.setValueAtTime(0.0001, when);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, gainValue * (beatIndex % 4 === 0 ? 0.42 : 0.28)), when + 0.003);
+  gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.055);
+  oscillator.connect(gain); gain.connect(audioContext.destination);
+  oscillator.start(when); oscillator.stop(when + 0.06);
+}
+
+function tickMetronome() {
+  if (audioPlayer.paused || audioPlayer.ended || !audioContext) return;
+  const bpm = Number(metronomeBpmInput?.value);
+  if (!Number.isFinite(bpm) || bpm < 30 || bpm > 300) return;
+  const mediaTime = audioPlayer.currentTime || 0;
+  const rate = audioPlayer.playbackRate || 1;
+  const beatSeconds = 60 / bpm;
+  if (lastMetronomeMediaTime !== null && (mediaTime < lastMetronomeMediaTime - 0.05 || mediaTime - lastMetronomeMediaTime > 0.35)) {
+    nextBeatTime = Math.ceil((mediaTime - 0.001) / beatSeconds) * beatSeconds;
+  }
+  if (nextBeatTime === null) {
+    const nearestBeat = Math.round(mediaTime / beatSeconds) * beatSeconds;
+    nextBeatTime = Math.abs(mediaTime - nearestBeat) < 0.08 ? nearestBeat : Math.ceil(mediaTime / beatSeconds) * beatSeconds;
+  }
+  const horizon = mediaTime + 0.12 * rate;
+  while (nextBeatTime <= horizon) {
+    const beatIndex = Math.round(nextBeatTime / beatSeconds);
+    const delay = Math.max(0, (nextBeatTime - mediaTime) / rate);
+    scheduleMetronomeClick(audioContext.currentTime + delay, beatIndex);
+    nextBeatTime += beatSeconds;
+  }
+  lastMetronomeMediaTime = mediaTime;
+}
+
+async function startMetronome() {
+  try {
+    await ensureAudioContext();
+    if (audioPlayer.paused || audioPlayer.ended) return;
+    resetMetronomeGrid();
+    if (metronomeTimer) clearInterval(metronomeTimer);
+    tickMetronome();
+    metronomeTimer = setInterval(tickMetronome, 25);
+    metronomeMessage.textContent = 'Metronome follows playback speed. At 0.70×, 120 BPM clicks at 84 BPM.';
+  } catch (err) {
+    metronomeMessage.textContent = err.message;
+  }
+}
+function stopMetronome() {
+  if (metronomeTimer) clearInterval(metronomeTimer);
+  metronomeTimer = null;
+  nextBeatTime = null;
+  lastMetronomeMediaTime = null;
+}
+
 function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
   const whole = Math.floor(seconds);
@@ -188,6 +385,7 @@ function updateLoopUI() {
 }
 function setPlaybackSpeed(rate, custom = false) {
   audioPlayer.playbackRate = rate;
+  setPitchPreservation(audioPlayer);
   if (custom) {
     speedSelect.value = 'custom';
   } else {
@@ -198,7 +396,8 @@ function setPlaybackSpeed(rate, custom = false) {
   if (sourceBpmInput.value && Number.isFinite(originalBpm) && originalBpm > 0) {
     targetBpmInput.value = (originalBpm * rate).toFixed(1).replace(/\.0$/, '');
   }
-  tempoMessage.textContent = `Playback speed: ${rate.toFixed(2)}×${sourceBpmInput.value ? ` · effective tempo approximately ${Math.round(Number(sourceBpmInput.value) * rate * 10) / 10} BPM` : ''}. Pitch changes with playback speed.`;
+  tempoMessage.textContent = `Playback speed: ${rate.toFixed(2)}×${sourceBpmInput.value ? ` · effective song tempo approximately ${Math.round(Number(sourceBpmInput.value) * rate * 10) / 10} BPM` : ''}. Pitch preservation is enabled where supported.`;
+  updateMetronomeBpmDisplay();
 }
 function resetLoop() {
   loopStart = null;
@@ -219,15 +418,17 @@ playToggleButton.addEventListener('click', async () => {
 });
 audioPlayer.addEventListener('play', () => {
   playToggleButton.textContent = 'Pause';
+  startMetronome();
   if (mixerMode) playStemPlayers();
 });
 audioPlayer.addEventListener('pause', () => {
   playToggleButton.textContent = 'Play';
+  stopMetronome();
   for (const player of stemPlayers.values()) player.audio.pause();
 });
-audioPlayer.addEventListener('seeking', () => syncStemPlayers(true));
+audioPlayer.addEventListener('seeking', () => { syncStemPlayers(true); resetMetronomeGrid(); });
 audioPlayer.addEventListener('seeked', () => syncStemPlayers(true));
-audioPlayer.addEventListener('ratechange', () => syncStemPlayers(true));
+audioPlayer.addEventListener('ratechange', () => { syncStemPlayers(true); updateMetronomeBpmDisplay(); });
 audioPlayer.addEventListener('timeupdate', () => {
   updateTimeDisplay();
   if (loopEnabled && loopStart !== null && loopEnd !== null && audioPlayer.currentTime >= loopEnd) {
@@ -235,6 +436,7 @@ audioPlayer.addEventListener('timeupdate', () => {
   }
   syncStemPlayers(false);
 });
+audioPlayer.addEventListener('ended', () => { stopMetronome(); playToggleButton.textContent = 'Play'; });
 audioPlayer.addEventListener('loadedmetadata', updateTimeDisplay);
 audioPlayer.addEventListener('durationchange', updateTimeDisplay);
 setLoopStartButton.addEventListener('click', () => {
@@ -341,7 +543,7 @@ form.addEventListener('submit', async e => {
   if (!fileInput.files.length) return;
   if (pollTimer) clearInterval(pollTimer);
   resultPanel.hidden = false; errorBox.hidden = true; playerArea.hidden = true;
-  audioPlayer.pause(); audioPlayer.muted = false; audioPlayer.removeAttribute('src'); audioPlayer.load();
+  audioPlayer.pause(); stopMetronome(); audioPlayer.muted = false; audioPlayer.removeAttribute('src'); audioPlayer.load();
   stopStemPlayers(); mixerMode = false; soloedStem = null; stemsList.hidden = false; stemsToggle.textContent = 'Use backing mix';
   jobMessage.textContent = 'Uploading audio…'; progressBar.style.width = '3%';
   submitButton.disabled = true; submitButton.querySelector('span:first-child').textContent = 'Processing…';

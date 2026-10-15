@@ -1,4 +1,4 @@
-# Jamloom MVP 0.2.6
+# Jamloom MVP 0.2.7
 
 A local-first AI music practice prototype. Upload a track, use Demucs to separate instruments, and play along with a backing track. The prototype also includes a first **session coordination server** for invite-code rooms and shared playback state.
 
@@ -84,6 +84,13 @@ Adds an in-browser stem mixer: individual Demucs stems can be balanced with volu
 
 Removes the upload-time instrument-to-remove selection. The selected Demucs model determines whether four or six stems are produced, and the generated backing mix includes all stems. The in-browser mixer is always visible after processing and is active by default; users can switch to the full backing mix without hiding the mixer.
 
-## Version 0.2.6
+## Version 0.2.7
 
 Polishes the practice mixer with a master-volume control (default 75% for extra output headroom), individual Solo buttons that temporarily isolate one stem without overwriting its mute state, and clearer active-loop styling. Mixer levels and mute choices remain in place when switching between the stem mixer and full backing mix. Adds keyboard shortcuts when focus is outside form controls: Space play/pause, Left/Right arrows seek five seconds, A/B set loop points, and L toggles looping.
+
+
+## Jamloom 0.2.7
+
+- Playback-rate changes enable the browser's native pitch-preservation feature where supported.
+- A metronome appears as a separate mixer track after stem separation, with manual BPM, volume, mute, and solo controls. Its beat grid follows the master player's timeline, so its effective BPM scales with playback speed.
+- The metronome click is generated locally with the Web Audio API; it is not a rendered/downloadable stem.

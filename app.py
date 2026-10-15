@@ -30,7 +30,7 @@ MODELS = {
     "htdemucs_6s": {"vocals", "drums", "bass", "guitar", "piano", "other"},
 }
 
-app = FastAPI(title="Jamloom", version="0.2.6")
+app = FastAPI(title="Jamloom", version="0.2.7")
 app.include_router(sessions_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
