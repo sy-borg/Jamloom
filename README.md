@@ -1,6 +1,16 @@
-# StemForge
+# Jamloom MVP 0.2.6
 
-A local-first prototype for turning a user's audio into a backing track using Demucs. It provides a browser UI, background separation jobs, instrument removal, playback, and WAV downloads.
+A local-first AI music practice prototype. Upload a track, use Demucs to separate instruments, and play along with a backing track. The prototype also includes a first **session coordination server** for invite-code rooms and shared playback state.
+
+## Current capabilities
+
+- Browser UI for audio upload and Demucs separation.
+- Four-stem (`htdemucs`) and experimental six-stem (`htdemucs_6s`) models. The selected model determines how many instruments appear in the mixer; all stems are included in the generated full mix.
+- Backing-track playback and WAV download, plus individual stem downloads. Practice controls include ±5-second navigation, A/B section looping, selectable playback speed, and BPM-based speed calculation. Browser playback-rate adjustment changes pitch as well as tempo.
+- Create a session, join with a six-character invite code, see participants, and broadcast shared playback state over WebSockets. Static assets use a versioned URL to avoid stale browser-cache issues. Hosting and joining are separate UI paths; the invite-code field only appears after choosing to join.
+- Session state currently includes track job ID, play/pause, position, loop points, BPM, and excluded stems.
+
+**Not implemented yet:** streaming live microphone/instrument audio, automatic audio-player synchronisation between session participants, recording a multi-person performance, accounts, persistent sessions, or production-grade access controls.
 
 ## Requirements
 
@@ -9,64 +19,71 @@ A local-first prototype for turning a user's audio into a backing track using De
 - A compatible PyTorch install and Demucs
 - Enough disk space for the uploaded track, model weights, separated stems, and output
 
-## Install on Arch Linux (recommended isolated environment)
-
-Install system prerequisites:
+## Install on Arch Linux
 
 ```bash
 sudo pacman -S --needed python python-pip ffmpeg
-```
-
-Create a virtual environment. On Arch, use a venv rather than installing Python packages into the system Python:
-
-```bash
-cd stemforge
+cd jamloom
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 ```
 
-Install PyTorch for your hardware using the current official instructions at https://pytorch.org/get-started/locally/ . For a CPU-only test, `python -m pip install torch torchaudio` may be sufficient depending on the current Python/PyTorch wheel matrix. Then install the app dependencies and Demucs:
+Install a PyTorch build compatible with your hardware. For an AMD GPU, use the current PyTorch ROCm installation instructions at https://pytorch.org/get-started/locally/ and verify compatibility with your GPU and installed libraries. Then:
 
 ```bash
 python -m pip install -r requirements.txt
 python -m pip install demucs
+python -c 'import torch; print("PyTorch:", torch.__version__, "HIP:", torch.version.hip, "GPU available:", torch.cuda.is_available())'
 ```
 
-Check that the environment can import the libraries:
-
-```bash
-python -c 'import torch, demucs, soundfile; print("torch", torch.__version__, "CUDA", torch.cuda.is_available())'
-```
-
-Start the web app:
+Start the app:
 
 ```bash
 uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-Open http://127.0.0.1:8000 in Firefox. The first separation downloads the model weights, so it needs an internet connection. Later processing can run locally without sending audio to a third-party service.
+Open http://127.0.0.1:8000. The first separation downloads model weights; subsequent separation can run locally.
 
-## Models
+## Try session coordination
 
-- `htdemucs`: standard four stems: vocals, drums, bass, other.
-- `htdemucs_6s`: experimental six stems: vocals, drums, bass, guitar, piano, other.
+1. Open Jamloom in one browser and create a session.
+2. Copy the six-character invite code.
+3. Open Jamloom in another browser (or another device that can reach this server), enter a display name and invite code, and join.
+4. Use **Share Play**, **Share Pause**, or change the shared position/BPM. Connected browsers receive the updated session state.
 
-The six-stem model is more useful for guitar practice but is experimental and can produce artifacts. The app removes one selected stem from the mix. It currently chooses a single stem to remove in the UI; the backend can accept comma-separated stem names.
+The current UI demonstrates coordination, but does not yet automatically control each browser's audio element. For a second device on your LAN, run Uvicorn bound to an appropriate LAN interface and ensure your firewall allows access; do not expose this prototype directly to the public internet.
 
-## Important prototype limitations
+### Session API
 
-- This is a single-user local prototype, not safe to expose directly to the internet.
-- Jobs and metadata live in memory; restarting the server clears the job list, although files remain on disk.
-- There is no authentication, quotas, job queue persistence, or automatic cleanup yet.
-- Uploaded files are extension-checked and size-limited, but production deployment needs stronger content validation, malware/resource controls, storage isolation, per-user authorization, retention/deletion controls, rate limiting, and reverse-proxy limits.
-- Demucs separation can be slow on CPU. GPU support depends on the PyTorch build and hardware. Verify model and weight licensing before commercial use.
-- Mixing stems can change the sound compared with the original mix; peak limiting here is simple headroom scaling, not mastering.
+- `POST /api/sessions` — create a session (`title`, `display_name`, optional `track_job_id`)
+- `POST /api/sessions/join` — join with `invite_code` and `display_name`
+- `GET /api/sessions/{session_id}` — fetch state (send `X-Participant-Token`)
+- `POST /api/sessions/{session_id}/state` — update shared state (send `X-Participant-Token`)
+- `DELETE /api/sessions/{session_id}/participants/me` — leave the session
+- `WS /api/sessions/{session_id}/ws?token=...` — receive snapshots/updates and send `{"type":"state_update","state":{"playing":true}}`
 
-## Next steps
+The server provides a shared state clock (`state.updated_at`) in Unix seconds. A future synchronised player can estimate the current play position as `position_seconds + (server_now - updated_at)` while `playing` is true, then periodically correct drift. This is groundwork, not a claim of low-latency remote jamming.
 
-1. Test on several short tracks and inspect separation quality.
-2. Add checkboxes to remove multiple stems, plus per-stem volume controls.
-3. Add waveform and loop playback.
-4. Add BPM / beat estimation and later chord or note visualization.
-5. Before public deployment, move processing into a persistent task queue and add accounts, isolated storage, quotas, cleanup, and commercial licensing review.
+## Data and security limitations
+
+- Session records, participant tokens and connection state are in memory; restarting the process clears all active sessions. Use one server process only for this version.
+- Participant tokens are bearer secrets. Anyone with a participant token can read and update that session's shared state. Don't log or share tokens.
+- There is no user account system, rate limiting, session expiry, persistent store, or production-grade abuse protection.
+- Session coordination does not transport live instrument audio. A future live-jam feature will need dedicated low-latency media transport and careful latency testing; the current HTTP/WebSocket server is not sufficient by itself.
+- Jobs and metadata for audio separation also live in memory. Restarting the app clears the job list even though files may remain on disk.
+- Verify model-weight licensing and copyright requirements before offering a commercial hosted service.
+
+
+## Version 0.2.4
+
+Adds an in-browser stem mixer: individual Demucs stems can be balanced with volume sliders or muted independently. The main backing-track player remains the master transport, so playback, seeking, looping, and playback speed are synchronized across stems. The mixer is always visible after processing and is the default playback mode. The full backing mix remains available as an alternative, and each stem can still be downloaded.
+
+
+## Version 0.2.5
+
+Removes the upload-time instrument-to-remove selection. The selected Demucs model determines whether four or six stems are produced, and the generated backing mix includes all stems. The in-browser mixer is always visible after processing and is active by default; users can switch to the full backing mix without hiding the mixer.
+
+## Version 0.2.6
+
+Polishes the practice mixer with a master-volume control (default 75% for extra output headroom), individual Solo buttons that temporarily isolate one stem without overwriting its mute state, and clearer active-loop styling. Mixer levels and mute choices remain in place when switching between the stem mixer and full backing mix. Adds keyboard shortcuts when focus is outside form controls: Space play/pause, Left/Right arrows seek five seconds, A/B set loop points, and L toggles looping.

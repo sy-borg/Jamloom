@@ -14,21 +14,24 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
+from sessions import router as sessions_router
+
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("STEMFORGE_DATA", BASE_DIR / "data")).resolve()
+DATA_DIR = Path(os.environ.get("JAMLOOM_DATA", os.environ.get("STEMFORGE_DATA", BASE_DIR / "data"))).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 JOB_DIR = DATA_DIR / "jobs"
 for directory in (UPLOAD_DIR, JOB_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
-MAX_UPLOAD_BYTES = int(os.environ.get("STEMFORGE_MAX_UPLOAD_BYTES", 500 * 1024 * 1024))
+MAX_UPLOAD_BYTES = int(os.environ.get("JAMLOOM_MAX_UPLOAD_BYTES", os.environ.get("STEMFORGE_MAX_UPLOAD_BYTES", 500 * 1024 * 1024)))
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus", ".aiff", ".aif", ".wma"}
 MODELS = {
     "htdemucs": {"vocals", "drums", "bass", "other"},
     "htdemucs_6s": {"vocals", "drums", "bass", "guitar", "piano", "other"},
 }
 
-app = FastAPI(title="StemForge", version="0.1.0")
+app = FastAPI(title="Jamloom", version="0.2.6")
+app.include_router(sessions_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -48,7 +51,7 @@ def safe_output_name(name: str) -> str:
     return "".join(c for c in cleaned if c.isalnum() or c in " ._-()").strip()[:160] or "track"
 
 
-def run_separation(job_id: str, source: Path, model: str, excluded: list[str]) -> None:
+def run_separation(job_id: str, source: Path, model: str) -> None:
     job_root = JOB_DIR / job_id
     separated_root = job_root / "separated"
     output_path = job_root / "backing.wav"
@@ -80,15 +83,10 @@ def run_separation(job_id: str, source: Path, model: str, excluded: list[str]) -
         stem_paths = {p.stem: p for p in track_dir.glob("*.wav")}
         if not stem_paths:
             raise RuntimeError("Demucs finished but produced no WAV stems.")
-        missing = set(excluded) - set(stem_paths)
-        if missing:
-            raise RuntimeError(f"The selected stem(s) are not available for this model: {', '.join(sorted(missing))}.")
-
-        included = [p for stem, p in stem_paths.items() if stem not in excluded]
-        if not included:
-            raise RuntimeError("You cannot exclude every stem; select at least one instrument to keep.")
-
-        update_job(job_id, progress="Mixing the remaining stems…", available_stems=sorted(stem_paths))
+        # Always build the full mix from every separated stem. Instrument choices
+        # now happen in the browser mixer, without requiring another separation.
+        included = list(stem_paths.values())
+        update_job(job_id, progress="Mixing all stems…", available_stems=sorted(stem_paths))
         mix = None
         sample_rate = None
         for path in included:
@@ -135,20 +133,15 @@ async def health():
 async def create_job(
     file: UploadFile = File(...),
     model: str = Form("htdemucs"),
-    exclude: str = Form("vocals"),
+    # Accept the old field for compatibility with cached clients, but ignore it:
+    # all stems are now included and can be muted in the in-browser mixer.
+    exclude: str | None = Form(None),
 ):
     if model not in MODELS:
         raise HTTPException(400, "Unknown separation model.")
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, f"Unsupported file extension. Supported: {', '.join(sorted(ALLOWED_EXTENSIONS))}")
-    excluded = sorted({x.strip().lower() for x in exclude.split(",") if x.strip()})
-    invalid = set(excluded) - MODELS[model]
-    if invalid:
-        raise HTTPException(400, f"This model does not provide: {', '.join(sorted(invalid))}")
-    if len(excluded) >= len(MODELS[model]):
-        raise HTTPException(400, "Keep at least one stem in the backing track.")
-
     job_id = uuid.uuid4().hex
     destination = UPLOAD_DIR / f"{job_id}{suffix}"
     total = 0
@@ -173,9 +166,8 @@ async def create_job(
         "status": "queued",
         "progress": "Waiting to start…",
         "model": model,
-        "excluded": excluded,
     }
-    threading.Thread(target=run_separation, args=(job_id, destination, model, excluded), daemon=True).start()
+    threading.Thread(target=run_separation, args=(job_id, destination, model), daemon=True).start()
     return {"id": job_id, "status": "queued", "status_url": f"/api/jobs/{job_id}"}
 
 

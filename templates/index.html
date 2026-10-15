@@ -4,14 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>StemForge — backing tracks from your music</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <title>Jamloom — play your part</title>
+  <link rel="stylesheet" href="/static/style.css?v=0.2.6">
 </head>
 <body>
   <main class="shell">
     <header class="hero">
-      <div class="mark">SF</div>
-      <div><p class="eyebrow">LOCAL AUDIO WORKSHOP</p><h1>StemForge</h1><p class="lede">Turn your own songs into backing tracks.</p></div>
+      <div class="mark">JL</div>
+      <div><p class="eyebrow">YOUR MUSIC · YOUR PART · YOUR JAM</p><h1>Jamloom</h1><p class="lede">Turn your own songs into backing tracks.</p></div>
     </header>
 
     <section class="panel">
@@ -21,15 +21,12 @@
           <span class="upload-icon">↑</span><strong id="file-label">Drop an audio file here</strong><span>or click to browse · MP3, WAV, FLAC, M4A, OGG</span>
           <input id="audio-file" name="file" type="file" accept="audio/*,.flac,.aiff,.aif,.wma" required>
         </label>
-        <div class="form-grid">
-          <label>Separation quality
+        <div class="form-grid model-grid">
+          <label>Separation model
             <select name="model" id="model">
               <option value="htdemucs">4 stems · faster, general-purpose</option>
               <option value="htdemucs_6s">6 stems · includes guitar & piano (experimental)</option>
             </select>
-          </label>
-          <label>Instrument to remove
-            <select name="exclude" id="exclude"></select>
           </label>
         </div>
         <button id="submit-button" type="submit"><span>Generate backing track</span><span aria-hidden="true">↗</span></button>
@@ -44,12 +41,90 @@
       <div id="player-area" hidden>
         <div class="track-title"><span class="equalizer">▥</span><div><strong id="result-filename">Backing track</strong><span>WAV · mixed stems</span></div></div>
         <audio id="audio-player" controls preload="metadata"></audio>
-        <div class="result-actions"><a id="download-link" class="button secondary" href="#">Download WAV ↓</a><button id="stems-toggle" class="button ghost" type="button">Show individual stems</button></div>
-        <div id="stems-list" class="stems-list" hidden></div>
+        <section class="practice-controls" aria-labelledby="practice-heading">
+          <div class="practice-heading"><h3 id="practice-heading">Practice controls</h3><span id="time-display" aria-live="off">0:00 / 0:00</span></div>
+          <p class="shortcut-hint">Shortcuts: <kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> ±5s · <kbd>A</kbd>/<kbd>B</kbd> set loop points · <kbd>L</kbd> toggle loop</p>
+          <div class="transport-controls" aria-label="Playback navigation">
+            <button id="rewind-button" class="button ghost" type="button" title="Rewind 5 seconds">↶ 5s</button>
+            <button id="play-toggle-button" type="button">Play</button>
+            <button id="forward-button" class="button ghost" type="button" title="Forward 5 seconds">5s ↷</button>
+          </div>
+          <div class="loop-controls">
+            <div class="loop-markers"><span>Loop start <strong id="loop-start-display">Not set</strong></span><span>Loop end <strong id="loop-end-display">Not set</strong></span></div>
+            <div class="result-actions">
+              <button id="set-loop-start" class="button secondary" type="button">Set start (A)</button>
+              <button id="set-loop-end" class="button secondary" type="button">Set end (B)</button>
+              <button id="loop-toggle" class="button ghost" type="button" aria-pressed="false">Loop off</button>
+              <button id="clear-loop" class="button ghost" type="button">Clear loop</button>
+            </div>
+            <p id="loop-message" class="hint" role="status">Set A and B while playing or seeking, then turn looping on.</p>
+          </div>
+          <div class="tempo-controls">
+            <div class="tempo-speed">
+              <label for="speed-select">Playback speed
+                <select id="speed-select">
+                  <option value="0.5">0.50×</option><option value="0.6">0.60×</option><option value="0.7">0.70×</option><option value="0.75">0.75×</option><option value="0.8">0.80×</option><option value="0.9">0.90×</option><option value="1" selected>1.00×</option><option value="1.1">1.10×</option><option value="1.2">1.20×</option><option value="1.25">1.25×</option><option value="1.5">1.50×</option><option value="2">2.00×</option><option value="custom" disabled>Custom BPM ratio</option>
+                </select>
+              </label>
+            </div>
+            <div class="bpm-adjust">
+              <label for="source-bpm">Original BPM<input id="source-bpm" type="number" min="1" max="400" step="0.1" placeholder="e.g. 120"></label>
+              <label for="target-bpm">Practice BPM<input id="target-bpm" type="number" min="1" max="400" step="0.1" placeholder="e.g. 90"></label>
+              <button id="apply-bpm" class="button secondary" type="button">Set tempo</button>
+            </div>
+            <p id="tempo-message" class="hint">Playback speed changes pitch as well as tempo. Enter the track's BPM and your target BPM to calculate a practice speed.</p>
+          </div>
+        </section>
+        <div class="result-actions"><a id="download-link" class="button secondary" href="#">Download full mix WAV ↓</a><button id="stems-toggle" class="button ghost" type="button">Use backing mix</button></div>
+        <section aria-labelledby="mixer-heading">
+          <div class="mixer-heading"><div><h3 id="mixer-heading">Stem mixer</h3><span id="mixer-model-label" class="hint">All separated instruments</span></div><div class="master-volume"><label for="master-volume">Master <strong id="master-volume-value">75%</strong></label><input id="master-volume" type="range" min="0" max="100" step="1" value="75" aria-label="Master volume"></div></div>
+          <div id="stems-list" class="stems-list">
+            <p class="mixer-intro">Your separated instruments will appear here when processing finishes. Adjust levels, mute or solo stems independently.</p>
+          </div>
+        </section>
       </div>
     </section>
-    <footer><span>STEMFORGE <span class="version">0.1.0</span></span><span>Local prototype · Powered by Demucs</span></footer>
+    <section class="panel session-panel">
+      <div class="section-heading"><span class="step">03</span><div><h2>Jam session</h2><p>Create a room or join one with an invite code. This prototype syncs session state, not live microphone audio.</p></div></div>
+      <div class="form-grid session-profile-grid">
+        <label>Your display name<input id="session-name" maxlength="40" value="Musician" autocomplete="nickname"></label>
+      </div>
+      <div class="session-entry-grid">
+        <div class="session-entry-card">
+          <h3>Start something new</h3>
+          <p>Host a session and invite another musician.</p>
+          <label>Session title<input id="session-title" maxlength="100" value="Jam session"></label>
+          <button id="create-session" type="button">Create new session <span aria-hidden="true">↗</span></button>
+        </div>
+        <div class="session-entry-card">
+          <h3>Join a session</h3>
+          <p>Already have an invite code? Join the host.</p>
+          <button id="show-join-form" class="button secondary" type="button" aria-expanded="false" aria-controls="join-session-form">Join existing session</button>
+          <div id="join-session-form" class="join-session-form" hidden>
+            <label>Six-character invite code<input id="join-code" maxlength="6" placeholder="ABC123" autocapitalize="characters" autocomplete="off"></label>
+            <div class="result-actions"><button id="join-session" class="button secondary" type="button">Join session</button><button id="cancel-join" class="button ghost" type="button">Cancel</button></div>
+          </div>
+        </div>
+      </div>
+      <div id="session-message" class="session-message" role="status">No active session.</div>
+      <div id="session-room" hidden>
+        <div class="session-code-row"><span>Invite code</span><strong id="session-code">------</strong><button id="copy-session-code" class="button ghost" type="button">Copy</button></div>
+        <p id="session-status" class="hint"></p>
+        <div id="participant-list" class="participant-list"></div>
+        <div class="form-grid session-state-grid">
+          <label>Playback position (seconds)<input id="session-position" type="number" min="0" step="0.1" value="0"></label>
+          <label>Tempo (BPM)<input id="session-bpm" type="number" min="1" max="400" step="0.1" placeholder="Optional"></label>
+        </div>
+        <div class="result-actions">
+          <button id="session-play" type="button">Share Play</button>
+          <button id="session-pause" class="button ghost" type="button">Share Pause</button>
+          <button id="leave-session" class="button ghost" type="button">Leave session</button>
+        </div>
+        <p class="hint">This is coordination groundwork: it broadcasts shared playback state between connected browsers. It does not yet stream microphones or automatically synchronise the audio element.</p>
+      </div>
+    </section>
+    <footer><span>JAMLOOM <span class="version">0.2.6</span></span><span>Local prototype · Powered by Demucs</span></footer>
   </main>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=0.2.6"></script>
 </body>
 </html>
