@@ -54,3 +54,15 @@ kbd{display:inline-block;padding:2px 5px;border:1px solid #3a4c5b;border-radius:
 .metronome-effective-label{font-size:11px;color:var(--muted);margin:8px 0 0}
 .metronome-effective-label strong{color:var(--cyan);font-variant-numeric:tabular-nums}
 @media(max-width:600px){.metronome-controls{flex-wrap:wrap}.metronome-bpm-label{flex:0 0 auto}.metronome-controls .stem-volume-label{flex:1 1 100px}}
+
+/* Jamloom 0.2.8 shared persistent song library */
+.library-status{font-size:12px;color:var(--muted);padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:#0b121a;margin-bottom:10px}
+.library-list{display:flex;flex-direction:column;gap:9px}
+.library-item{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:13px;border:1px solid var(--line);border-radius:11px;background:#0b121a;min-width:0}
+.library-item-details{display:flex;flex-direction:column;gap:6px;min-width:0}
+.library-item-details strong{font-size:12px;overflow-wrap:anywhere}
+.library-item-details span{font-size:10px;color:var(--muted)}
+.library-item-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.library-item-actions button{padding:9px 12px;font-size:10px;justify-content:center}
+.library-delete{color:#ffb8c1;border-color:#603942}
+@media(max-width:600px){.library-item{align-items:stretch;flex-direction:column}.library-item-actions>*{flex:1}.library-item-actions{width:100%}}

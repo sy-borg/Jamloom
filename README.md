@@ -1,4 +1,4 @@
-# Jamloom MVP 0.2.7
+# Jamloom MVP 0.2.8.1
 
 A local-first AI music practice prototype. Upload a track, use Demucs to separate instruments, and play along with a backing track. The prototype also includes a first **session coordination server** for invite-code rooms and shared playback state.
 
@@ -6,7 +6,7 @@ A local-first AI music practice prototype. Upload a track, use Demucs to separat
 
 - Browser UI for audio upload and Demucs separation.
 - Four-stem (`htdemucs`) and experimental six-stem (`htdemucs_6s`) models. The selected model determines how many instruments appear in the mixer; all stems are included in the generated full mix.
-- Backing-track playback and WAV download, plus individual stem downloads. Practice controls include ±5-second navigation, A/B section looping, selectable playback speed, and BPM-based speed calculation. Browser playback-rate adjustment changes pitch as well as tempo.
+- Backing-track playback and WAV download, plus individual stem downloads. Practice controls include ±5-second navigation, A/B section looping, selectable playback speed, and BPM-based speed calculation. Playback-rate adjustment preserves pitch in supported browsers.
 - Create a session, join with a six-character invite code, see participants, and broadcast shared playback state over WebSockets. Static assets use a versioned URL to avoid stale browser-cache issues. Hosting and joining are separate UI paths; the invite-code field only appears after choosing to join.
 - Session state currently includes track job ID, play/pause, position, loop points, BPM, and excluded stems.
 
@@ -71,7 +71,7 @@ The server provides a shared state clock (`state.updated_at`) in Unix seconds. A
 - Participant tokens are bearer secrets. Anyone with a participant token can read and update that session's shared state. Don't log or share tokens.
 - There is no user account system, rate limiting, session expiry, persistent store, or production-grade abuse protection.
 - Session coordination does not transport live instrument audio. A future live-jam feature will need dedicated low-latency media transport and careful latency testing; the current HTTP/WebSocket server is not sufficient by itself.
-- Jobs and metadata for audio separation also live in memory. Restarting the app clears the job list even though files may remain on disk.
+- The shared song library is persisted under `data/library/` (or `$JAMLOOM_DATA/library/`) and restored when the server restarts. Practice settings are saved per track in the browser local storage, so they are specific to that browser profile.
 - Verify model-weight licensing and copyright requirements before offering a commercial hosted service.
 
 
@@ -94,3 +94,16 @@ Polishes the practice mixer with a master-volume control (default 75% for extra 
 - Playback-rate changes enable the browser's native pitch-preservation feature where supported.
 - A metronome appears as a separate mixer track after stem separation, with manual BPM, volume, mute, and solo controls. Its beat grid follows the master player's timeline, so its effective BPM scales with playback speed.
 - The metronome click is generated locally with the Web Audio API; it is not a rendered/downloadable stem.
+
+
+## Jamloom 0.2.8
+
+- Adds a persistent shared library of processed tracks. Successful separations save the original upload, backing mix, separated stems, and metadata under `data/library/<track-id>/`. The library is shared by every browser using the same Jamloom server and survives server restarts.
+- The library lists track name, duration, separation model, and date, and allows tracks to be reopened or permanently deleted.
+- Per-track practice settings are remembered in each browser profile: master volume, playback speed, loop points and loop enabled state, stem levels/mutes, and metronome BPM/level/mute. These settings are browser-local; the audio files are server-shared.
+- Existing session coordination and audio practice features are retained. BPM/time-signature detection and beat/accent synchronization remain future work.
+
+
+## Jamloom 0.2.8.1
+
+Bugfix release: avoid passing `status` twice when a separation completes and the resulting track is added to the persistent library.

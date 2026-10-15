@@ -39,6 +39,8 @@ let metronomeMuteButton = null;
 let metronomeSoloButton = null;
 const metronomeEffectiveBpm = document.querySelector('#metronome-effective-bpm');
 const metronomeMessage = document.querySelector('#metronome-message');
+const libraryList = document.querySelector('#library-list');
+const libraryStatus = document.querySelector('#library-status');
 let loopStart = null;
 let loopEnd = null;
 let loopEnabled = false;
@@ -53,6 +55,88 @@ let audioContext = null;
 let metronomeTimer = null;
 let nextBeatTime = null;
 let lastMetronomeMediaTime = null;
+
+function settingsKey(trackId) { return `jamloom.settings.${trackId}`; }
+function saveTrackSettings() {
+  if (!currentJobId) return;
+  const stems = {};
+  for (const [name, player] of stemPlayers) stems[name] = {level: Number(player.slider.value), muted: player.userMuted};
+  const settings = {
+    masterVolume: Number(masterVolume.value), speed: audioPlayer.playbackRate || 1,
+    loopStart, loopEnd, loopEnabled, stems,
+    metronomeBpm: Number(metronomeBpmInput?.value || 120),
+    metronomeLevel: Number(metronomeLevelInput?.value || 60), metronomeMuted,
+  };
+  try { localStorage.setItem(settingsKey(currentJobId), JSON.stringify(settings)); } catch {}
+}
+function restoreTrackSettings(trackId) {
+  let settings;
+  try { settings = JSON.parse(localStorage.getItem(settingsKey(trackId)) || 'null'); } catch { settings = null; }
+  if (!settings) return;
+  if (Number.isFinite(settings.masterVolume)) { masterVolume.value = String(Math.max(0, Math.min(100, settings.masterVolume))); masterVolumeValue.textContent = `${masterVolume.value}%`; }
+  if (Number.isFinite(settings.speed) && settings.speed >= 0.25 && settings.speed <= 2) setPlaybackSpeed(settings.speed, true);
+  loopStart = Number.isFinite(settings.loopStart) ? settings.loopStart : null;
+  loopEnd = Number.isFinite(settings.loopEnd) ? settings.loopEnd : null;
+  loopEnabled = Boolean(settings.loopEnabled && loopStart !== null && loopEnd !== null && loopEnd > loopStart);
+  if (settings.stems) for (const [name, state] of Object.entries(settings.stems)) {
+    const player = stemPlayers.get(name); if (!player) continue;
+    if (Number.isFinite(state.level)) player.slider.value = String(Math.max(0, Math.min(100, state.level)));
+    player.value.textContent = `${player.slider.value}%`; player.userMuted = Boolean(state.muted);
+  }
+  if (metronomeBpmInput && Number.isFinite(settings.metronomeBpm)) metronomeBpmInput.value = String(Math.max(30, Math.min(300, settings.metronomeBpm)));
+  if (metronomeLevelInput && Number.isFinite(settings.metronomeLevel)) { metronomeLevelInput.value = String(Math.max(0, Math.min(100, settings.metronomeLevel))); metronomeLevelValue.textContent = `${metronomeLevelInput.value}%`; }
+  metronomeMuted = Boolean(settings.metronomeMuted);
+  updateLoopUI(); updateStemAudioLevels(); resetMetronomeGrid(); saveTrackSettings();
+}
+function formatLibraryDuration(seconds) {
+  if (!Number.isFinite(Number(seconds))) return 'Duration unknown';
+  const total = Math.max(0, Math.floor(Number(seconds)));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+async function loadLibrary() {
+  try {
+    const response = await fetch('/api/library'); const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not load library.');
+    libraryList.replaceChildren();
+    if (!data.tracks.length) { libraryStatus.textContent = 'No processed songs yet. Generate a backing track below and it will appear here.'; return; }
+    libraryStatus.textContent = `${data.count} processed song${data.count === 1 ? '' : 's'} available on this server.`;
+    for (const track of data.tracks) {
+      const row = document.createElement('article'); row.className = 'library-item';
+      const details = document.createElement('div'); details.className = 'library-item-details';
+      const title = document.createElement('strong'); title.textContent = track.filename || 'Untitled track';
+      const meta = document.createElement('span');
+      const date = track.created_at ? new Date(track.created_at).toLocaleDateString() : 'Saved';
+      const model = track.model === 'htdemucs_6s' ? '6 stems' : '4 stems';
+      meta.textContent = `${formatLibraryDuration(track.duration)} · ${model} · ${date}`;
+      details.append(title, meta);
+      const actions = document.createElement('div'); actions.className = 'library-item-actions';
+      const open = document.createElement('button'); open.type = 'button'; open.className = 'button secondary'; open.textContent = 'Open';
+      open.addEventListener('click', () => loadLibraryTrack(track.id));
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button ghost library-delete'; remove.textContent = 'Delete';
+      remove.addEventListener('click', async () => {
+        if (!window.confirm(`Delete “${track.filename || 'this track'}” and its separated audio from the shared library? This cannot be undone.`)) return;
+        remove.disabled = true;
+        try { const res = await fetch(`/api/library/${encodeURIComponent(track.id)}`, {method:'DELETE'}); const result = await res.json(); if (!res.ok) throw new Error(result.detail || 'Delete failed.');
+          if (currentJobId === track.id) { audioPlayer.pause(); stopMetronome(); stopStemPlayers(); playerArea.hidden = true; currentJobId = null; }
+          try { localStorage.removeItem(settingsKey(track.id)); } catch {}
+          await loadLibrary();
+        } catch (err) { libraryStatus.textContent = err.message; remove.disabled = false; }
+      });
+      actions.append(open, remove); row.append(details, actions); libraryList.append(row);
+    }
+  } catch (err) { libraryStatus.textContent = `Library could not be loaded: ${err.message}`; }
+}
+async function loadLibraryTrack(trackId) {
+  try {
+    const response = await fetch('/api/library'); const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'Could not read library.');
+    const track = data.tracks.find(item => item.id === trackId);
+    if (!track) throw new Error('This track is no longer in the library.');
+    resultPanel.hidden = false; errorBox.hidden = true;
+    loadCompletedTrack(track, true);
+    resultPanel.scrollIntoView({behavior:'smooth', block:'start'});
+  } catch (err) { libraryStatus.textContent = err.message; }
+}
 
 modelSelect.addEventListener('change', () => {
   mixerModelLabel.textContent = modelSelect.value === 'htdemucs_6s' ? '6 stems · vocals, drums, bass, guitar, piano, other' : '4 stems · vocals, drums, bass, other';
@@ -173,18 +257,18 @@ function renderStems(stems) {
     const slider = document.createElement('input'); slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.step = '1'; slider.value = '100'; slider.setAttribute('aria-label', `${name} volume`);
     slider.addEventListener('input', () => {
       value.textContent = `${slider.value}%`;
-      updateStemAudioLevels();
+      updateStemAudioLevels(); saveTrackSettings();
     });
     const mute = document.createElement('button'); mute.type = 'button'; mute.className = 'button ghost stem-mute'; mute.textContent = 'Mute'; mute.setAttribute('aria-pressed', 'false');
     mute.addEventListener('click', () => {
       const player = stemPlayers.get(name);
       player.userMuted = !player.userMuted;
-      updateStemAudioLevels();
+      updateStemAudioLevels(); saveTrackSettings();
     });
     const solo = document.createElement('button'); solo.type = 'button'; solo.className = 'button ghost stem-solo'; solo.textContent = 'Solo'; solo.setAttribute('aria-pressed', 'false');
     solo.addEventListener('click', () => {
       soloedStem = soloedStem === name ? null : name;
-      updateStemAudioLevels();
+      updateStemAudioLevels(); saveTrackSettings();
     });
     const download = document.createElement('a'); download.className = 'stem-download'; download.href = url; download.download = `${name}.wav`; download.textContent = '↓ WAV';
     const controls = document.createElement('div'); controls.className = 'stem-controls';
@@ -200,7 +284,7 @@ function renderStems(stems) {
 masterVolume.addEventListener('input', () => {
   masterVolumeValue.textContent = `${masterVolume.value}%`;
   audioPlayer.volume = masterGain();
-  updateStemAudioLevels();
+  updateStemAudioLevels(); saveTrackSettings();
 });
 masterVolumeValue.textContent = `${masterVolume.value}%`;
 function renderMetronomeRow() {
@@ -265,14 +349,14 @@ function renderMetronomeRow() {
     }
     bpmInput.setCustomValidity('');
     resetMetronomeGrid();
-    updateMetronomeBpmDisplay();
+    updateMetronomeBpmDisplay(); saveTrackSettings();
   });
   volume.addEventListener('input', () => {
     levelValue.textContent = `${volume.value}%`;
-    updateStemAudioLevels();
+    updateStemAudioLevels(); saveTrackSettings();
   });
-  mute.addEventListener('click', () => { metronomeMuted = !metronomeMuted; updateStemAudioLevels(); });
-  solo.addEventListener('click', () => { soloedStem = soloedStem === '__metronome' ? null : '__metronome'; updateStemAudioLevels(); });
+  mute.addEventListener('click', () => { metronomeMuted = !metronomeMuted; updateStemAudioLevels(); saveTrackSettings(); });
+  solo.addEventListener('click', () => { soloedStem = soloedStem === '__metronome' ? null : '__metronome'; updateStemAudioLevels(); saveTrackSettings(); });
   updateMetronomeBpmDisplay();
 }
 
@@ -397,7 +481,7 @@ function setPlaybackSpeed(rate, custom = false) {
     targetBpmInput.value = (originalBpm * rate).toFixed(1).replace(/\.0$/, '');
   }
   tempoMessage.textContent = `Playback speed: ${rate.toFixed(2)}×${sourceBpmInput.value ? ` · effective song tempo approximately ${Math.round(Number(sourceBpmInput.value) * rate * 10) / 10} BPM` : ''}. Pitch preservation is enabled where supported.`;
-  updateMetronomeBpmDisplay();
+  updateMetronomeBpmDisplay(); saveTrackSettings();
 }
 function resetLoop() {
   loopStart = null;
@@ -405,6 +489,7 @@ function resetLoop() {
   loopEnabled = false;
   updateLoopUI();
   loopMessage.textContent = 'Set A and B while playing or seeking, then turn looping on.';
+  saveTrackSettings();
 }
 rewindButton.addEventListener('click', () => { audioPlayer.currentTime = Math.max(0, (audioPlayer.currentTime || 0) - 5); });
 forwardButton.addEventListener('click', () => {
@@ -443,7 +528,7 @@ setLoopStartButton.addEventListener('click', () => {
   loopStart = audioPlayer.currentTime || 0;
   if (loopEnd !== null && loopEnd <= loopStart) { loopEnd = null; loopEnabled = false; }
   updateLoopUI();
-  loopMessage.textContent = loopEnd === null ? 'Start A set. Seek to the end of the section and set B.' : 'Loop start updated.';
+  loopMessage.textContent = loopEnd === null ? 'Start A set. Seek to the end of the section and set B.' : 'Loop start updated.'; saveTrackSettings();
 });
 setLoopEndButton.addEventListener('click', () => {
   const current = audioPlayer.currentTime || 0;
@@ -457,14 +542,14 @@ setLoopEndButton.addEventListener('click', () => {
   }
   loopEnd = current;
   updateLoopUI();
-  loopMessage.textContent = `Loop section set: ${formatTime(loopStart)}–${formatTime(loopEnd)}.`;
+  loopMessage.textContent = `Loop section set: ${formatTime(loopStart)}–${formatTime(loopEnd)}.`; saveTrackSettings();
 });
 loopToggleButton.addEventListener('click', () => {
   if (loopStart === null || loopEnd === null || loopEnd <= loopStart) return;
   loopEnabled = !loopEnabled;
   if (loopEnabled && (audioPlayer.currentTime < loopStart || audioPlayer.currentTime >= loopEnd)) audioPlayer.currentTime = loopStart;
   updateLoopUI();
-  loopMessage.textContent = loopEnabled ? 'Looping this section. Turn Loop off to continue past B.' : 'Loop is off.';
+  loopMessage.textContent = loopEnabled ? 'Looping this section. Turn Loop off to continue past B.' : 'Loop is off.'; saveTrackSettings();
 });
 clearLoopButton.addEventListener('click', resetLoop);
 speedSelect.addEventListener('change', () => {
@@ -508,6 +593,22 @@ document.addEventListener('keydown', event => {
   }
 });
 
+function loadCompletedTrack(job, fromLibrary = false) {
+  audioPlayer.pause(); stopMetronome(); stopStemPlayers();
+  metronomeMuted = false; metronomeBpmInput = null; metronomeLevelInput = null; metronomeLevelValue = null; metronomeMuteButton = null; metronomeSoloButton = null;
+  playerArea.hidden = false; currentJobId = job.id;
+  document.querySelector('#result-filename').textContent = job.filename || 'Backing track';
+  audioPlayer.src = job.backing_url; audioPlayer.volume = masterGain(); audioPlayer.playbackRate = 1; speedSelect.value = '1';
+  loopStart = null; loopEnd = null; loopEnabled = false; updateLoopUI(); updateTimeDisplay();
+  downloadLink.href = job.download_url; currentStems = job.stems || {};
+  mixerModelLabel.textContent = job.model === 'htdemucs_6s' ? '6 stems · vocals, drums, bass, guitar, piano, other' : '4 stems · vocals, drums, bass, other';
+  renderStems(currentStems);
+  restoreTrackSettings(job.id);
+  jobMessage.textContent = fromLibrary ? 'Loaded from your library.' : 'Saved to your library.';
+  setProgress('completed');
+  submitButton.disabled = false; submitButton.querySelector('span:first-child').textContent = 'Generate another backing track';
+}
+
 async function pollJob(id) {
   try {
     const response = await fetch(`/api/jobs/${id}`);
@@ -517,16 +618,8 @@ async function pollJob(id) {
     setProgress(job.status);
     if (job.status === 'completed') {
       clearInterval(pollTimer); pollTimer = null;
-      playerArea.hidden = false;
-      currentJobId = job.id;
-      document.querySelector('#result-filename').textContent = job.filename || 'Backing track';
-      audioPlayer.src = job.backing_url;
-      audioPlayer.volume = masterGain();
-      audioPlayer.playbackRate = 1; speedSelect.value = '1'; resetLoop(); updateTimeDisplay();
-      downloadLink.href = job.download_url;
-      currentStems = job.stems || {};
-      mixerModelLabel.textContent = job.model === 'htdemucs_6s' ? '6 stems · vocals, drums, bass, guitar, piano, other' : '4 stems · vocals, drums, bass, other';
-      renderStems(currentStems);
+      loadCompletedTrack(job, false);
+      await loadLibrary();
       submitButton.disabled = false; submitButton.querySelector('span:first-child').textContent = 'Generate another backing track';
     } else if (job.status === 'failed') {
       clearInterval(pollTimer); pollTimer = null;
@@ -709,3 +802,7 @@ copySessionCodeButton.addEventListener('click', async () => {
   catch { setSessionMessage(`Invite code: ${sessionCode.textContent}`); }
 });
 joinCodeInput.addEventListener('input', () => { joinCodeInput.value = joinCodeInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0,6); });
+
+
+// Shared server-side library: all browsers connected to this instance see the same tracks.
+loadLibrary();

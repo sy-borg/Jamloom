@@ -5,6 +5,8 @@ import shutil
 import subprocess
 import threading
 import uuid
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +22,8 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("JAMLOOM_DATA", os.environ.get("STEMFORGE_DATA", BASE_DIR / "data"))).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 JOB_DIR = DATA_DIR / "jobs"
-for directory in (UPLOAD_DIR, JOB_DIR):
+LIBRARY_DIR = DATA_DIR / "library"
+for directory in (UPLOAD_DIR, JOB_DIR, LIBRARY_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 MAX_UPLOAD_BYTES = int(os.environ.get("JAMLOOM_MAX_UPLOAD_BYTES", os.environ.get("STEMFORGE_MAX_UPLOAD_BYTES", 500 * 1024 * 1024)))
@@ -30,13 +33,71 @@ MODELS = {
     "htdemucs_6s": {"vocals", "drums", "bass", "guitar", "piano", "other"},
 }
 
-app = FastAPI(title="Jamloom", version="0.2.7")
+app = FastAPI(title="Jamloom", version="0.2.8.1")
 app.include_router(sessions_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.Lock()
+
+
+def track_dir(track_id: str) -> Path:
+    """Return the persistent directory for a library track, or its temporary job directory."""
+    library_path = LIBRARY_DIR / track_id
+    return library_path if library_path.is_dir() else JOB_DIR / track_id
+
+
+def public_track(metadata: dict[str, Any]) -> dict[str, Any]:
+    track_id = metadata["id"]
+    model = metadata["model"]
+    stems = metadata.get("stems") or sorted(MODELS.get(model, set()))
+    return {
+        **metadata,
+        "status": "completed",
+        "progress": "Ready in your library.",
+        "backing_url": f"/api/jobs/{track_id}/backing",
+        "download_url": f"/api/jobs/{track_id}/download",
+        "stems": {stem: f"/api/jobs/{track_id}/stems/{stem}" for stem in stems},
+        "available_stems": stems,
+    }
+
+
+def load_persistent_library() -> None:
+    """Restore completed tracks into the in-memory job index after a server restart."""
+    for metadata_path in LIBRARY_DIR.glob("*/track.json"):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if not metadata.get("id") or not metadata.get("model"):
+                continue
+            track = public_track(metadata)
+            if (LIBRARY_DIR / track["id"] / "backing.wav").is_file():
+                jobs[track["id"]] = track
+        except (OSError, ValueError, KeyError):
+            continue
+
+
+def write_track_metadata(track_id: str, filename: str, model: str, backing_path: Path) -> dict[str, Any]:
+    import soundfile as sf
+    info = sf.info(str(backing_path))
+    metadata = {
+        "id": track_id,
+        "filename": filename,
+        "model": model,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "duration": round(float(info.duration), 3),
+        "sample_rate": int(info.samplerate),
+        "stems": sorted(p.stem for p in (LIBRARY_DIR / track_id / "separated" / model).glob("*/*.wav"))
+            or sorted(p.stem for p in (LIBRARY_DIR / track_id / "separated" / model).glob("*.wav")),
+    }
+    target = LIBRARY_DIR / track_id / "track.json"
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    temporary.replace(target)
+    return metadata
+
+
+load_persistent_library()
 
 
 def update_job(job_id: str, **values: Any) -> None:
@@ -104,15 +165,19 @@ def run_separation(job_id: str, source: Path, model: str) -> None:
             mix *= 0.999 / peak
         sf.write(output_path, mix, sample_rate, subtype="PCM_16")
 
-        update_job(
-            job_id,
-            status="completed",
-            progress="Backing track is ready.",
-            backing_url=f"/api/jobs/{job_id}/backing",
-            download_url=f"/api/jobs/{job_id}/download",
-            stems={stem: f"/api/jobs/{job_id}/stems/{stem}" for stem in sorted(stem_paths)},
-            available_stems=sorted(stem_paths),
-        )
+        # Promote successful jobs into the persistent, server-wide song library.
+        library_root = LIBRARY_DIR / job_id
+        library_root.mkdir(parents=True, exist_ok=True)
+        if source.is_file():
+            shutil.move(str(source), str(library_root / f"original{source.suffix.lower()}"))
+        shutil.move(str(output_path), str(library_root / "backing.wav"))
+        if separated_root.exists():
+            shutil.move(str(separated_root), str(library_root / "separated"))
+        shutil.rmtree(job_root, ignore_errors=True)
+        metadata = write_track_metadata(job_id, jobs[job_id]["filename"], model, library_root / "backing.wav")
+        completed_track = public_track(metadata)
+        completed_track["progress"] = "Saved to your library."
+        update_job(job_id, **completed_track)
     except subprocess.TimeoutExpired:
         update_job(job_id, status="failed", error="Separation exceeded the six-hour limit.")
     except Exception as exc:
@@ -184,7 +249,7 @@ async def job_status(job_id: str):
 async def backing(job_id: str):
     with jobs_lock:
         job = jobs.get(job_id)
-    path = JOB_DIR / job_id / "backing.wav"
+    path = track_dir(job_id) / "backing.wav"
     if not job or job.get("status") != "completed" or not path.is_file():
         raise HTTPException(404, "Backing track is not ready.")
     return FileResponse(path, media_type="audio/wav", filename="backing-track.wav")
@@ -194,7 +259,7 @@ async def backing(job_id: str):
 async def download_backing(job_id: str):
     with jobs_lock:
         job = jobs.get(job_id)
-    path = JOB_DIR / job_id / "backing.wav"
+    path = track_dir(job_id) / "backing.wav"
     if not job or job.get("status") != "completed" or not path.is_file():
         raise HTTPException(404, "Backing track is not ready.")
     stem = Path(job["filename"]).stem or "track"
@@ -209,7 +274,30 @@ async def get_stem(job_id: str, stem_name: str):
         job = jobs.get(job_id)
     if not job or job.get("status") != "completed":
         raise HTTPException(404, "Stems are not ready.")
-    candidates = list((JOB_DIR / job_id / "separated" / job["model"]).glob(f"*/{stem_name}.wav"))
+    candidates = list((track_dir(job_id) / "separated" / job["model"]).glob(f"*/{stem_name}.wav"))
     if not candidates:
         raise HTTPException(404, "Stem not found for this model.")
     return FileResponse(candidates[0], media_type="audio/wav", filename=f"{stem_name}.wav")
+
+
+@app.get("/api/library")
+async def list_library():
+    with jobs_lock:
+        tracks = [dict(job) for job in jobs.values() if job.get("status") == "completed" and job.get("library_id", job.get("id")) == job.get("id")]
+    tracks.sort(key=lambda track: track.get("created_at", ""), reverse=True)
+    return {"tracks": tracks, "count": len(tracks)}
+
+
+@app.delete("/api/library/{track_id}")
+async def delete_library_track(track_id: str):
+    # Only valid UUID-like IDs can address a direct child of the library folder.
+    if not track_id or any(ch not in "0123456789abcdef" for ch in track_id.lower()):
+        raise HTTPException(400, "Invalid library track ID.")
+    path = LIBRARY_DIR / track_id
+    with jobs_lock:
+        job = jobs.get(track_id)
+        if not job or job.get("status") != "completed" or not path.is_dir():
+            raise HTTPException(404, "Library track not found.")
+        shutil.rmtree(path, ignore_errors=False)
+        jobs.pop(track_id, None)
+    return {"deleted": track_id}

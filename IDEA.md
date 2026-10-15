@@ -8,8 +8,8 @@
 
 ## Timeline
 
-* Today: Upload a song, mute guitar and bass, and jam with friends in the same room.
-* Next: Add looping, tempo control, a metronome and better practice tools.
+* Today: Upload a song, mute guitar and bass, and jam with friends in the same room. CHECK
+* Next: Add looping, tempo control, a metronome and better practice tools. CHECK
 * Eventually: Invite friends online, synchronise playback, record everyone's parts and mix the result.
 
 ## Function

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Jamloom — play your part</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.2.7">
+  <link rel="stylesheet" href="/static/style.css?v=0.2.8.1">
 </head>
 <body>
   <main class="shell">
@@ -14,8 +14,15 @@
       <div><p class="eyebrow">YOUR MUSIC · YOUR PART · YOUR JAM</p><h1>Jamloom</h1><p class="lede">Turn your own songs into backing tracks.</p></div>
     </header>
 
+    <section class="panel library-panel" aria-labelledby="library-heading">
+      <div class="section-heading"><span class="step">01</span><div><h2 id="library-heading">Your library</h2><p>Processed songs are stored on this server and shared by everyone using this Jamloom instance.</p></div></div>
+      <div id="library-status" class="library-status" role="status">Loading your library…</div>
+      <div id="library-list" class="library-list"></div>
+      <p class="hint">Practice settings are remembered in this browser. The song files themselves are shared on disk.</p>
+    </section>
+
     <section class="panel">
-      <div class="section-heading"><span class="step">01</span><div><h2>Choose a track</h2><p>Audio is processed locally on this machine.</p></div></div>
+      <div class="section-heading"><span class="step">02</span><div><h2>Choose a track</h2><p>Audio is processed locally on this machine.</p></div></div>
       <form id="upload-form">
         <label class="drop-zone" id="drop-zone" for="audio-file">
           <span class="upload-icon">↑</span><strong id="file-label">Drop an audio file here</strong><span>or click to browse · MP3, WAV, FLAC, M4A, OGG</span>
@@ -35,7 +42,7 @@
     </section>
 
     <section class="panel result-panel" id="result-panel" hidden>
-      <div class="section-heading"><span class="step">02</span><div><h2>Your backing track</h2><p id="job-message">Preparing your track…</p></div></div>
+      <div class="section-heading"><span class="step">03</span><div><h2>Your backing track</h2><p id="job-message">Preparing your track…</p></div></div>
       <div class="progress-track"><div id="progress-bar"></div></div>
       <div id="error-box" class="error" hidden></div>
       <div id="player-area" hidden>
@@ -87,7 +94,7 @@
       </div>
     </section>
     <section class="panel session-panel">
-      <div class="section-heading"><span class="step">03</span><div><h2>Jam session</h2><p>Create a room or join one with an invite code. This prototype syncs session state, not live microphone audio.</p></div></div>
+      <div class="section-heading"><span class="step">04</span><div><h2>Jam session</h2><p>Create a room or join one with an invite code. This prototype syncs session state, not live microphone audio.</p></div></div>
       <div class="form-grid session-profile-grid">
         <label>Your display name<input id="session-name" maxlength="40" value="Musician" autocomplete="nickname"></label>
       </div>
@@ -125,8 +132,8 @@
         <p class="hint">This is coordination groundwork: it broadcasts shared playback state between connected browsers. It does not yet stream microphones or automatically synchronise the audio element.</p>
       </div>
     </section>
-    <footer><span>JAMLOOM <span class="version">0.2.7</span></span><span>Local prototype · Powered by Demucs</span></footer>
+    <footer><span>JAMLOOM <span class="version">0.2.8.1</span></span><span>Local prototype · Powered by Demucs</span></footer>
   </main>
-  <script src="/static/app.js?v=0.2.7"></script>
+  <script src="/static/app.js?v=0.2.8.1"></script>
 </body>
 </html>
