@@ -1,3 +1,7 @@
+## Version 0.4.3
+
+- Added Jamloom favicon (SVG with ICO fallback) and linked it from the app page.
+
 # Jamloom 0.4.1
 
 A local-first AI music practice prototype. Upload a track, use Demucs to separate instruments, and play along with a backing track. The prototype also includes a first **session coordination server** for invite-code rooms and shared playback state.
