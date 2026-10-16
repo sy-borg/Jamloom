@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Jamloom — play your part</title>
-  <link rel="stylesheet" href="/static/style.css?v=0.3.1">
+  <link rel="stylesheet" href="/static/style.css?v=0.4.2">
 </head>
 <body>
   <main class="shell">
@@ -45,13 +45,42 @@
     </section>
 
     <section class="panel result-panel mixer-panel" id="result-panel" aria-labelledby="mixer-page-heading">
-      <div class="section-heading"><span class="step">02</span><div><h2 id="mixer-page-heading">Mixer</h2><p id="job-message">Select a song in your library to resume practising.</p></div></div>
+      <div class="section-heading player-section-heading"><span class="step">02</span><div><h2 id="mixer-page-heading">Practice studio</h2><p id="job-message">Select a song in your library to resume practising.</p></div><button id="practice-mode-toggle" class="button secondary" type="button" aria-pressed="true">Show mixer</button></div>
       <div id="mixer-empty-state" class="mixer-empty-state"><span class="empty-icon">♫</span><strong>Your next jam starts here</strong><span>Open a song from your library, or create a new backing track above.</span></div>
       <div id="player-area" hidden>
         <div class="track-title"><span class="equalizer">▥</span><div><strong id="result-filename">Backing track</strong><span>WAV · mixed stems</span></div></div>
         <audio id="audio-player" controls preload="metadata"></audio>
+        <section id="note-display" class="note-display" aria-label="Note display">
+          <div class="note-display-heading"><span class="note-symbol">♪</span><div><strong>Note detection</strong><span>Experimental · octave checks · best with single bass notes</span></div></div>
+          <div class="note-analysis-controls">
+            <label for="note-stem-select">Instrument
+              <select id="note-stem-select"><option value="bass">Bass</option><option value="guitar">Guitar</option></select>
+            </label>
+            <button id="analyze-notes-button" class="button secondary" type="button">Re-analyze notes</button>
+          </div>
+          <p id="note-analysis-status" class="note-analysis-status" role="status">Note suggestions are generated automatically after separation. They may take a little while; you can practise while analysis continues.</p>
+          <div class="note-current"><span id="current-note-name" class="note-placeholder">—</span><div><strong id="current-note-label">No note at this position</strong><span id="current-note-time">Play or seek to explore detected notes.</span></div></div>
+          <div id="note-events" class="note-events"><span class="note-events-empty">Detected notes will appear here after analysis.</span></div>
+          <section class="note-editor" aria-label="Edit note arrangement">
+            <div class="note-editor-heading"><strong>Edit suggested notes</strong><span>Tap a note above to select it.</span></div>
+            <div class="note-editor-fields">
+              <label>Pitch <input id="edit-note-pitch" type="text" inputmode="text" maxlength="5" value="C2" autocomplete="off" aria-label="Note pitch, for example C#2"></label>
+              <label>Start (s) <input id="edit-note-start" type="number" min="0" step="0.01" value="0"></label>
+              <label>End (s) <input id="edit-note-end" type="number" min="0.01" step="0.01" value="0.2"></label>
+            </div>
+            <div class="note-editor-actions">
+              <button id="apply-note-edit" class="button secondary" type="button">Apply edit</button>
+              <button id="add-note-event" class="button secondary" type="button">Add at playhead</button>
+              <button id="delete-note-event" class="button ghost" type="button">Delete note</button>
+              <button id="save-note-arrangement" class="button" type="button">Save arrangement</button>
+            </div>
+            <p id="note-editor-status" class="note-editor-status" role="status">Edits are drafts until you save the arrangement.</p>
+          </section>
+          <p class="note-analysis-disclaimer">Pitch estimates are experimental, not verified sheet music. Chords, fast passages and separation artifacts can produce incorrect or missing notes. Times refer to the original song.</p>
+        </section>
         <section class="practice-controls" aria-labelledby="practice-heading">
           <div class="practice-heading"><h3 id="practice-heading">Practice controls</h3><span id="time-display" aria-live="off">0:00 / 0:00</span></div>
+          <input id="playback-seek" class="playback-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Seek through song">
           <p class="shortcut-hint">Shortcuts: <kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> ±5s · <kbd>A</kbd>/<kbd>B</kbd> set loop points · <kbd>L</kbd> toggle loop</p>
           <div class="transport-controls" aria-label="Playback navigation">
             <button id="rewind-button" class="button ghost" type="button" title="Rewind 5 seconds">↶ 5s</button>
@@ -134,8 +163,8 @@
         <p class="hint">This is coordination groundwork: it broadcasts shared playback state between connected browsers. It does not yet stream microphones or automatically synchronise the audio element.</p>
       </div>
     </section>
-    <footer><span>JAMLOOM <span class="version">0.3.0</span></span><span>Local prototype · Powered by Demucs</span></footer>
+    <footer><span>JAMLOOM <span class="version">0.4.2</span></span><span>Local prototype · Powered by Demucs</span></footer>
   </main>
-  <script src="/static/app.js?v=0.3.1"></script>
+  <script src="/static/app.js?v=0.4.2"></script>
 </body>
 </html>

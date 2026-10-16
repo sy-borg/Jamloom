@@ -20,6 +20,9 @@ const rewindButton = document.querySelector('#rewind-button');
 const playToggleButton = document.querySelector('#play-toggle-button');
 const forwardButton = document.querySelector('#forward-button');
 const timeDisplay = document.querySelector('#time-display');
+const playbackSeek = document.querySelector('#playback-seek');
+const practiceModeToggle = document.querySelector('#practice-mode-toggle');
+let practiceMode = true;
 const setLoopStartButton = document.querySelector('#set-loop-start');
 const setLoopEndButton = document.querySelector('#set-loop-end');
 const loopToggleButton = document.querySelector('#loop-toggle');
@@ -59,12 +62,235 @@ let mixerMode = false;
 let soloedStem = null;
 const stemPlayers = new Map();
 let metronomeMuted = false;
+let currentTrackBpm = null;
+let currentTrackTimeSignature = '';
 let audioContext = null;
 let metronomeTimer = null;
-let nextBeatTime = null;
-let lastMetronomeMediaTime = null;
+let nextBeatAudioTime = null;
+let nextBeatIndex = 0;
+let metronomeDownbeatOffset = 0;
+let currentPitchAnalysis = null;
+let activeNoteEventIndex = -2;
+let selectedNoteEventIndex = -1;
+let arrangementDirty = false;
+let noteAnalysisPollTimer = null;
+let noteAnalysisRequestToken = 0;
+const noteStemSelect = document.querySelector('#note-stem-select');
+const analyzeNotesButton = document.querySelector('#analyze-notes-button');
+const noteAnalysisStatus = document.querySelector('#note-analysis-status');
+const currentNoteName = document.querySelector('#current-note-name');
+const currentNoteLabel = document.querySelector('#current-note-label');
+const currentNoteTime = document.querySelector('#current-note-time');
+const noteEventsContainer = document.querySelector('#note-events');
+const editNotePitch = document.querySelector('#edit-note-pitch');
+const editNoteStart = document.querySelector('#edit-note-start');
+const editNoteEnd = document.querySelector('#edit-note-end');
+const applyNoteEditButton = document.querySelector('#apply-note-edit');
+const addNoteEventButton = document.querySelector('#add-note-event');
+const deleteNoteEventButton = document.querySelector('#delete-note-event');
+const saveNoteArrangementButton = document.querySelector('#save-note-arrangement');
+const noteEditorStatus = document.querySelector('#note-editor-status');
+
+function formatNoteTime(seconds) { return formatTime(seconds); }
+function renderNoteEvents() {
+  if (!currentPitchAnalysis?.events?.length) {
+    noteEventsContainer.replaceChildren();
+    const empty = document.createElement('span'); empty.className = 'note-events-empty';
+    empty.textContent = 'No notes detected. Try another stem or a different section of the song.';
+    noteEventsContainer.append(empty); return;
+  }
+  const time = audioPlayer.currentTime || 0;
+  const events = currentPitchAnalysis.events;
+  let index = events.findIndex(event => event.start <= time && event.end > time);
+  if (index < 0) index = events.findIndex(event => event.start > time);
+  if (index < 0) index = Math.max(0, events.length - 1);
+  const start = Math.max(0, index - 3);
+  const visible = events.slice(start, start + 10);
+  noteEventsContainer.replaceChildren();
+  visible.forEach((event, offset) => {
+    const eventIndex = start + offset;
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'note-event';
+    if (eventIndex === activeNoteEventIndex) button.classList.add('active');
+    if (eventIndex === selectedNoteEventIndex) button.classList.add('selected');
+    const note = document.createElement('strong'); note.textContent = event.note;
+    const frequency = document.createElement('span'); frequency.className = 'note-event-frequency'; frequency.textContent = event.frequency_hz != null ? `${event.frequency_hz.toFixed(1)} Hz` : '';
+    const timestamp = document.createElement('span'); timestamp.textContent = formatNoteTime(event.start);
+    button.append(note, frequency, timestamp);
+    button.addEventListener('click', () => { selectedNoteEventIndex = eventIndex; audioPlayer.currentTime = event.start; fillNoteEditor(); updateCurrentNote(true); });
+    noteEventsContainer.append(button);
+  });
+}
+function midiToNote(midi) {
+  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+  return `${names[midi % 12]}${Math.floor(midi / 12) - 1}`;
+}
+function parseNotePitch(value) {
+  const match = String(value).trim().replace(/♯/g, '#').replace(/♭/g, 'b').match(/^([A-Ga-g])([#b]?)(-?\d)$/);
+  if (!match) return null;
+  const semitones = {C:0,D:2,E:4,F:5,G:7,A:9,B:11};
+  let midi = (Number(match[3]) + 1) * 12 + semitones[match[1].toUpperCase()];
+  if (match[2] === '#') midi += 1;
+  if (match[2] === 'b') midi -= 1;
+  return midi >= 0 && midi <= 127 ? midi : null;
+}
+function fillNoteEditor() {
+  const event = currentPitchAnalysis?.events?.[selectedNoteEventIndex];
+  const enabled = Boolean(event);
+  editNotePitch.disabled = !enabled; editNoteStart.disabled = !enabled; editNoteEnd.disabled = !enabled;
+  applyNoteEditButton.disabled = !enabled; deleteNoteEventButton.disabled = !enabled;
+  if (!event) return;
+  editNotePitch.value = event.note || midiToNote(event.midi);
+  editNoteStart.value = Number(event.start).toFixed(2);
+  editNoteEnd.value = Number(event.end).toFixed(2);
+}
+function markArrangementDraft(message = 'Unsaved changes. Save the arrangement to keep them with this track.') {
+  arrangementDirty = true;
+  noteEditorStatus.textContent = message;
+  saveNoteArrangementButton.textContent = 'Save arrangement *';
+}
+function noteFrequency(midi) { return 440 * (2 ** ((midi - 69) / 12)); }
+applyNoteEditButton.addEventListener('click', () => {
+  const event = currentPitchAnalysis?.events?.[selectedNoteEventIndex];
+  if (!event) return;
+  const midi = parseNotePitch(editNotePitch.value);
+  const start = Number(editNoteStart.value), end = Number(editNoteEnd.value);
+  if (midi === null) { noteEditorStatus.textContent = 'Enter a pitch such as A1, C#2 or Bb2.'; return; }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > Number(currentPitchAnalysis.duration || audioPlayer.duration || Infinity)) {
+    noteEditorStatus.textContent = 'Check the timing: start must be before end and both must be within the song.'; return;
+  }
+  Object.assign(event, {midi, note: midiToNote(midi), start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, edited: true});
+  currentPitchAnalysis.events.sort((a, b) => a.start - b.start);
+  selectedNoteEventIndex = currentPitchAnalysis.events.indexOf(event);
+  markArrangementDraft('Note updated. Save the arrangement to keep this change.');
+  fillNoteEditor(); updateCurrentNote(true);
+});
+addNoteEventButton.addEventListener('click', () => {
+  if (!currentPitchAnalysis) { noteEditorStatus.textContent = 'Wait for note analysis to finish first.'; return; }
+  const start = Math.max(0, Number(audioPlayer.currentTime) || 0);
+  const duration = Number(currentPitchAnalysis.duration || audioPlayer.duration || start + 0.2);
+  const end = Math.min(duration, start + 0.2);
+  if (end <= start) { noteEditorStatus.textContent = 'Move playback away from the end of the song to add a note.'; return; }
+  const midi = parseNotePitch(editNotePitch.value) ?? 36;
+  const event = {start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, midi, note: midiToNote(midi), frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, confidence: 1, edited: true};
+  currentPitchAnalysis.events.push(event); currentPitchAnalysis.events.sort((a, b) => a.start - b.start);
+  selectedNoteEventIndex = currentPitchAnalysis.events.indexOf(event);
+  markArrangementDraft('Note added. Adjust its pitch and timing, then save the arrangement.');
+  fillNoteEditor(); updateCurrentNote(true);
+});
+deleteNoteEventButton.addEventListener('click', () => {
+  if (!currentPitchAnalysis?.events?.[selectedNoteEventIndex]) return;
+  currentPitchAnalysis.events.splice(selectedNoteEventIndex, 1);
+  selectedNoteEventIndex = -1; markArrangementDraft('Note deleted. Save the arrangement to keep this change.');
+  fillNoteEditor(); updateCurrentNote(true);
+});
+saveNoteArrangementButton.addEventListener('click', async () => {
+  if (!currentJobId || !currentPitchAnalysis) return;
+  saveNoteArrangementButton.disabled = true;
+  try {
+    const response = await fetch(`/api/jobs/${currentJobId}/arrangements/${noteStemSelect.value}`, {
+      method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({events: currentPitchAnalysis.events})
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Could not save arrangement.');
+    currentPitchAnalysis.events = result.events; currentPitchAnalysis.arrangement_events = result.events;
+    arrangementDirty = false; saveNoteArrangementButton.textContent = 'Save arrangement';
+    noteEditorStatus.textContent = result.message || 'Arrangement saved with this track.';
+    selectedNoteEventIndex = Math.min(selectedNoteEventIndex, currentPitchAnalysis.events.length - 1);
+    fillNoteEditor(); updateCurrentNote(true);
+  } catch (error) { noteEditorStatus.textContent = `Could not save arrangement: ${error.message}`; }
+  finally { saveNoteArrangementButton.disabled = false; }
+});
+
+function updateCurrentNote(forceRender = false) {
+  const events = currentPitchAnalysis?.events || [];
+  const time = audioPlayer.currentTime || 0;
+  const index = events.findIndex(event => event.start <= time && event.end > time);
+  if (index >= 0) {
+    const event = events[index];
+    currentNoteName.textContent = event.note;
+    currentNoteLabel.textContent = `${event.note} · ${event.frequency_hz != null ? `${event.frequency_hz.toFixed(1)} Hz · ` : ''}${Math.round(event.confidence * 100)}% confidence`;
+    currentNoteTime.textContent = `${formatNoteTime(event.start)}–${formatNoteTime(event.end)}`;
+  } else {
+    currentNoteName.textContent = '—';
+    currentNoteLabel.textContent = 'No detected note at this position';
+    const next = events.find(event => event.start > time);
+    currentNoteTime.textContent = next ? `Next: ${next.note} at ${formatNoteTime(next.start)}` : 'No later detected notes';
+  }
+  if (forceRender || index !== activeNoteEventIndex) {
+    activeNoteEventIndex = index;
+    renderNoteEvents();
+  }
+}
+async function loadPitchAnalysis(stemName, poll = true) {
+  const requestToken = ++noteAnalysisRequestToken;
+  if (noteAnalysisPollTimer) { clearTimeout(noteAnalysisPollTimer); noteAnalysisPollTimer = null; }
+  currentPitchAnalysis = null; activeNoteEventIndex = -2; updateCurrentNote(true);
+  if (!currentJobId || !currentStems[stemName]) {
+    noteAnalysisStatus.textContent = `This track has no ${stemName} stem. Choose another instrument or use the 6-stem separation model.`;
+    analyzeNotesButton.disabled = true; analyzeNotesButton.textContent = 'Analyze notes'; return;
+  }
+  analyzeNotesButton.disabled = false; analyzeNotesButton.textContent = 'Re-analyze notes';
+  noteAnalysisStatus.textContent = `Checking ${stemName} note suggestions…`;
+  try {
+    const response = await fetch(`/api/jobs/${currentJobId}/notes/${stemName}`);
+    const data = await response.json();
+    if (requestToken !== noteAnalysisRequestToken) return;
+    if (response.ok && Array.isArray(data.events)) {
+      data.suggested_events = data.events.map(event => ({...event}));
+      data.events = (Array.isArray(data.arrangement_events) ? data.arrangement_events : data.events).map(event => ({...event}));
+      currentPitchAnalysis = data; selectedNoteEventIndex = -1; arrangementDirty = false;
+      saveNoteArrangementButton.textContent = 'Save arrangement';
+      noteEditorStatus.textContent = Array.isArray(data.arrangement_events) ? 'Your saved arrangement is loaded. Automatic suggestions remain unchanged.' : 'Edit the suggestions as needed, then save your arrangement.';
+      fillNoteEditor();
+      noteAnalysisStatus.textContent = `${data.events.length} ${Array.isArray(data.arrangement_events) ? 'arrangement notes' : 'note suggestions'} available for ${formatNoteTime(data.duration)}.${data.truncated ? ' Analysis is limited to the first 15 minutes.' : ''} These are estimates, not verified notation.`;
+      analyzeNotesButton.disabled = false; analyzeNotesButton.textContent = 'Re-analyze notes';
+      updateCurrentNote(true); return;
+    }
+    const state = data.status || (response.status === 404 ? 'pending' : 'failed');
+    noteAnalysisStatus.textContent = data.message || (state === 'pending' || state === 'running' ? `Analyzing ${stemName} notes in the background…` : `Note analysis is not ready (${state}).`);
+    if (state === 'pending' || state === 'running') {
+      analyzeNotesButton.disabled = true; analyzeNotesButton.textContent = 'Analyzing…';
+      if (poll) noteAnalysisPollTimer = setTimeout(() => loadPitchAnalysis(stemName), 2200);
+    } else {
+      analyzeNotesButton.disabled = false; analyzeNotesButton.textContent = 'Retry analysis';
+    }
+  } catch (error) {
+    if (requestToken !== noteAnalysisRequestToken) return;
+    noteAnalysisStatus.textContent = `Could not load note suggestions: ${error.message}`;
+    analyzeNotesButton.disabled = false; analyzeNotesButton.textContent = 'Retry analysis';
+  }
+}
+noteStemSelect.addEventListener('change', () => { selectedNoteEventIndex = -1; loadPitchAnalysis(noteStemSelect.value); });
+analyzeNotesButton.addEventListener('click', async () => {
+  if (!currentJobId) return;
+  const stemName = noteStemSelect.value;
+  analyzeNotesButton.disabled = true; noteStemSelect.disabled = true;
+  noteAnalysisStatus.textContent = `Analyzing ${stemName} stem… This runs locally and may take a little while.`;
+  try {
+    const response = await fetch(`/api/jobs/${currentJobId}/notes/${stemName}`, {method: 'POST'});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.detail || 'Analysis failed.');
+    currentPitchAnalysis = result; activeNoteEventIndex = -2;
+    analyzeNotesButton.textContent = 'Re-analyze notes';
+    noteAnalysisStatus.textContent = `${result.events.length} note events detected in ${formatNoteTime(result.duration)}.${result.truncated ? ' Analysis is limited to the first 15 minutes.' : ''} Treat these as estimates, not verified notation.`;
+    await loadPitchAnalysis(stemName, false);
+  } catch (error) { noteAnalysisStatus.textContent = error.message; }
+  finally { analyzeNotesButton.disabled = false; noteStemSelect.disabled = false; if (analyzeNotesButton.textContent === 'Analyzing…') analyzeNotesButton.textContent = 'Re-analyze notes'; }
+});
 
 function settingsKey(trackId) { return `jamloom.settings.${trackId}`; }
+function setPracticeMode(enabled, persist = true) {
+  practiceMode = Boolean(enabled);
+  resultPanel.classList.toggle('practice-mode', practiceMode);
+  practiceModeToggle.textContent = practiceMode ? 'Show mixer' : 'Practice mode';
+  practiceModeToggle.setAttribute('aria-pressed', String(practiceMode));
+  document.querySelector('#mixer-page-heading').textContent = practiceMode ? 'Practice studio' : 'Mixer';
+  if (persist) { try { localStorage.setItem('jamloom.practiceMode', String(practiceMode)); } catch {} }
+}
+try { practiceMode = localStorage.getItem('jamloom.practiceMode') !== 'false'; } catch {}
+setPracticeMode(practiceMode, false);
+practiceModeToggle.addEventListener('click', () => setPracticeMode(!practiceMode));
 function saveTrackSettings() {
   if (!currentJobId) return;
   const stems = {};
@@ -74,6 +300,7 @@ function saveTrackSettings() {
     loopStart, loopEnd, loopEnabled, stems,
     metronomeBpm: Number(metronomeBpmInput?.value || 120),
     metronomeLevel: Number(metronomeLevelInput?.value || 60), metronomeMuted,
+    metronomeDownbeatOffset,
   };
   try { localStorage.setItem(settingsKey(currentJobId), JSON.stringify(settings)); } catch {}
 }
@@ -94,6 +321,8 @@ function restoreTrackSettings(trackId) {
   if (metronomeBpmInput && Number.isFinite(settings.metronomeBpm)) metronomeBpmInput.value = String(Math.max(30, Math.min(300, settings.metronomeBpm)));
   if (metronomeLevelInput && Number.isFinite(settings.metronomeLevel)) { metronomeLevelInput.value = String(Math.max(0, Math.min(100, settings.metronomeLevel))); metronomeLevelValue.textContent = `${metronomeLevelInput.value}%`; }
   metronomeMuted = Boolean(settings.metronomeMuted);
+  if (Number.isFinite(settings.metronomeDownbeatOffset) && settings.metronomeDownbeatOffset >= 0) metronomeDownbeatOffset = settings.metronomeDownbeatOffset;
+  else metronomeDownbeatOffset = 0;
   updateLoopUI(); updateStemAudioLevels(); resetMetronomeGrid(); saveTrackSettings();
 }
 function formatLibraryDuration(seconds) {
@@ -360,9 +589,9 @@ function renderMetronomeRow() {
   bpmInput.type = 'number';
   bpmInput.min = '30';
   bpmInput.max = '300';
-  bpmInput.step = '1';
-  bpmInput.value = '120';
-  bpmInput.setAttribute('aria-label', 'Metronome tempo in beats per minute at normal playback speed');
+  bpmInput.step = '0.1';
+  bpmInput.value = currentTrackBpm && currentTrackBpm >= 30 && currentTrackBpm <= 300 ? String(currentTrackBpm) : '120';
+  bpmInput.setAttribute('aria-label', 'Metronome pulse rate in beats per minute at normal playback speed');
   bpmLabel.append(bpmInput);
 
   const volumeLabel = document.createElement('label');
@@ -377,9 +606,13 @@ function renderMetronomeRow() {
 
   const mute = document.createElement('button');
   mute.id = 'metronome-mute'; mute.type = 'button'; mute.className = 'button ghost stem-mute'; mute.textContent = 'Mute'; mute.setAttribute('aria-pressed', 'false');
+  const sync = document.createElement('button');
+  sync.id = 'metronome-sync'; sync.type = 'button'; sync.className = 'button secondary metronome-sync'; sync.textContent = 'Set downbeat'; sync.title = 'Set beat 1 at the current playback position';
+  const resetCycle = document.createElement('button');
+  resetCycle.id = 'metronome-reset-cycle'; resetCycle.type = 'button'; resetCycle.className = 'button ghost metronome-reset-cycle'; resetCycle.textContent = 'Reset cycle'; resetCycle.title = 'Make the next metronome pulse beat 1';
   const solo = document.createElement('button');
   solo.id = 'metronome-solo'; solo.type = 'button'; solo.className = 'button ghost stem-solo'; solo.textContent = 'Solo'; solo.setAttribute('aria-pressed', 'false');
-  controls.append(bpmLabel, volumeLabel, mute, solo);
+  controls.append(bpmLabel, volumeLabel, sync, resetCycle, mute, solo);
   row.append(info, controls);
   stemsList.append(row);
   metronomeBpmInput = bpmInput;
@@ -403,9 +636,58 @@ function renderMetronomeRow() {
     levelValue.textContent = `${volume.value}%`;
     updateStemAudioLevels(); saveTrackSettings();
   });
+  sync.addEventListener('click', () => {
+    metronomeDownbeatOffset = Math.max(0, audioPlayer.currentTime || 0);
+    resetMetronomeGrid();
+    if (metronomeMessage) metronomeMessage.textContent = `Downbeat set at ${formatTime(metronomeDownbeatOffset)}. This alignment is saved for this song in this browser.`;
+    saveTrackSettings();
+  });
+  resetCycle.addEventListener('click', () => {
+    const bpm = Number(metronomeBpmInput?.value || 120);
+    const beatSeconds = 60 / bpm;
+    const mediaTime = Math.max(0, audioPlayer.currentTime || 0);
+    const relative = Math.max(0, mediaTime - metronomeDownbeatOffset);
+    const nextPulse = metronomeDownbeatOffset + Math.ceil((relative + 0.001) / beatSeconds) * beatSeconds;
+    metronomeDownbeatOffset = Math.max(0, nextPulse);
+    resetMetronomeGrid();
+    if (metronomeMessage) metronomeMessage.textContent = `Bar cycle reset: the next pulse is beat 1. Alignment saved for this song in this browser.`;
+    saveTrackSettings();
+  });
   mute.addEventListener('click', () => { metronomeMuted = !metronomeMuted; updateStemAudioLevels(); saveTrackSettings(); });
   solo.addEventListener('click', () => { soloedStem = soloedStem === '__metronome' ? null : '__metronome'; updateStemAudioLevels(); saveTrackSettings(); });
   updateMetronomeBpmDisplay();
+  updateMetronomeMeterMessage();
+}
+
+function updateMetronomeMeterMessage() {
+  if (!metronomeMessage) return;
+  const meter = parseTimeSignature(currentTrackTimeSignature);
+  if (!meter) {
+    metronomeMessage.textContent = 'No time signature set; the metronome uses a 4/4 accent pattern. Set BPM manually, or add track metadata in the library. Timing follows playback speed.';
+  } else if (meter.compound) {
+    metronomeMessage.textContent = `${currentTrackTimeSignature}: clicks mark dotted-quarter pulses, grouped ${meter.pulses} per bar, with a strong first pulse and a lighter secondary accent where appropriate. BPM means dotted-quarter pulses per minute; timing follows playback speed.`;
+  } else {
+    metronomeMessage.textContent = `${currentTrackTimeSignature}: the first beat is accented${meter.numerator === 4 && meter.denominator === 4 ? ', with a lighter accent on beat 3' : ''}. BPM is the metronome beat rate; timing follows playback speed.`;
+  }
+}
+
+function parseTimeSignature(signature) {
+  const match = String(signature || '').trim().match(/^(\d{1,2})\s*\/\s*(1|2|4|8|16)$/);
+  if (!match) return null;
+  const numerator = Number(match[1]);
+  const denominator = Number(match[2]);
+  if (numerator < 1 || numerator > 16) return null;
+  const compound = denominator === 8 && numerator >= 6 && numerator % 3 === 0;
+  return { numerator, denominator, compound, pulses: compound ? numerator / 3 : numerator };
+}
+
+function getBeatAccent(beatIndex) {
+  const meter = parseTimeSignature(currentTrackTimeSignature) || {numerator: 4, denominator: 4, compound: false, pulses: 4};
+  const beatInBar = ((beatIndex % meter.pulses) + meter.pulses) % meter.pulses;
+  if (beatInBar === 0) return 'strong';
+  if (meter.compound && (meter.pulses === 2 ? beatInBar === 1 : meter.pulses === 4 ? beatInBar === 2 : beatInBar > 0)) return 'medium';
+  if (!meter.compound && meter.numerator === 4 && meter.denominator === 4 && beatInBar === 2) return 'medium';
+  return 'normal';
 }
 
 function updateMetronomeBpmDisplay() {
@@ -418,12 +700,30 @@ function updateMetronomeBpmDisplay() {
 
 function resetMetronomeGrid() {
   const bpm = Number(metronomeBpmInput?.value);
-  if (!Number.isFinite(bpm) || bpm <= 0) return;
+  if (!Number.isFinite(bpm) || bpm <= 0) {
+    nextBeatAudioTime = null;
+    nextBeatIndex = 0;
+    return;
+  }
   const beatSeconds = 60 / bpm;
-  const now = audioPlayer.currentTime || 0;
-  const nearestBeat = Math.round(now / beatSeconds) * beatSeconds;
-  nextBeatTime = Math.abs(now - nearestBeat) < 0.08 ? nearestBeat : Math.ceil(now / beatSeconds) * beatSeconds;
-  lastMetronomeMediaTime = now;
+  const mediaTime = audioPlayer.currentTime || 0;
+  const relativeTime = mediaTime - metronomeDownbeatOffset;
+  const nearestRelativeBeat = Math.round(relativeTime / beatSeconds) * beatSeconds;
+  let targetMediaTime;
+  if (relativeTime < 0) {
+    targetMediaTime = metronomeDownbeatOffset;
+  } else {
+    const targetRelativeBeat = Math.abs(relativeTime - nearestRelativeBeat) < 0.08
+      ? nearestRelativeBeat
+      : Math.ceil(relativeTime / beatSeconds) * beatSeconds;
+    targetMediaTime = metronomeDownbeatOffset + targetRelativeBeat;
+  }
+  nextBeatIndex = Math.max(0, Math.round((targetMediaTime - metronomeDownbeatOffset) / beatSeconds));
+  // Use the Web Audio clock for scheduling. The media clock is only used to
+  // align the grid when starting, changing tempo, seeking, or changing speed.
+  nextBeatAudioTime = audioContext
+    ? audioContext.currentTime + Math.max(0, targetMediaTime - mediaTime) / (audioPlayer.playbackRate || 1)
+    : null;
 }
 
 async function ensureAudioContext() {
@@ -443,10 +743,13 @@ function scheduleMetronomeClick(when, beatIndex) {
   if (gainValue <= 0) return;
   const oscillator = audioContext.createOscillator();
   const gain = audioContext.createGain();
+  const accent = getBeatAccent(beatIndex);
+  const frequency = accent === 'strong' ? 1320 : accent === 'medium' ? 1050 : 880;
+  const strength = accent === 'strong' ? 0.42 : accent === 'medium' ? 0.34 : 0.28;
   oscillator.type = 'sine';
-  oscillator.frequency.setValueAtTime(beatIndex % 4 === 0 ? 1320 : 880, when);
+  oscillator.frequency.setValueAtTime(frequency, when);
   gain.gain.setValueAtTime(0.0001, when);
-  gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, gainValue * (beatIndex % 4 === 0 ? 0.42 : 0.28)), when + 0.003);
+  gain.gain.exponentialRampToValueAtTime(Math.max(0.0002, gainValue * strength), when + 0.003);
   gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.055);
   oscillator.connect(gain); gain.connect(audioContext.destination);
   oscillator.start(when); oscillator.stop(when + 0.06);
@@ -456,24 +759,29 @@ function tickMetronome() {
   if (audioPlayer.paused || audioPlayer.ended || !audioContext) return;
   const bpm = Number(metronomeBpmInput?.value);
   if (!Number.isFinite(bpm) || bpm < 30 || bpm > 300) return;
-  const mediaTime = audioPlayer.currentTime || 0;
+
   const rate = audioPlayer.playbackRate || 1;
   const beatSeconds = 60 / bpm;
-  if (lastMetronomeMediaTime !== null && (mediaTime < lastMetronomeMediaTime - 0.05 || mediaTime - lastMetronomeMediaTime > 0.35)) {
-    nextBeatTime = Math.ceil((mediaTime - 0.001) / beatSeconds) * beatSeconds;
+  const audioNow = audioContext.currentTime;
+  const beatInterval = beatSeconds / rate;
+  if (nextBeatAudioTime === null) resetMetronomeGrid();
+  if (nextBeatAudioTime === null) return;
+
+  // If the browser briefly throttles this timer, discard stale beats rather
+  // than trying to play a burst of old clicks when the page wakes up.
+  if (nextBeatAudioTime < audioNow - beatInterval) {
+    const missed = Math.floor((audioNow - nextBeatAudioTime) / beatInterval) + 1;
+    nextBeatAudioTime += missed * beatInterval;
+    nextBeatIndex += missed;
   }
-  if (nextBeatTime === null) {
-    const nearestBeat = Math.round(mediaTime / beatSeconds) * beatSeconds;
-    nextBeatTime = Math.abs(mediaTime - nearestBeat) < 0.08 ? nearestBeat : Math.ceil(mediaTime / beatSeconds) * beatSeconds;
+
+  const horizon = audioNow + 0.12;
+  while (nextBeatAudioTime <= horizon) {
+    const when = Math.max(audioNow + 0.005, nextBeatAudioTime);
+    scheduleMetronomeClick(when, nextBeatIndex);
+    nextBeatAudioTime = when + beatInterval;
+    nextBeatIndex += 1;
   }
-  const horizon = mediaTime + 0.12 * rate;
-  while (nextBeatTime <= horizon) {
-    const beatIndex = Math.round(nextBeatTime / beatSeconds);
-    const delay = Math.max(0, (nextBeatTime - mediaTime) / rate);
-    scheduleMetronomeClick(audioContext.currentTime + delay, beatIndex);
-    nextBeatTime += beatSeconds;
-  }
-  lastMetronomeMediaTime = mediaTime;
 }
 
 async function startMetronome() {
@@ -484,7 +792,8 @@ async function startMetronome() {
     if (metronomeTimer) clearInterval(metronomeTimer);
     tickMetronome();
     metronomeTimer = setInterval(tickMetronome, 25);
-    metronomeMessage.textContent = 'Metronome follows playback speed. At 0.70×, 120 BPM clicks at 84 BPM.';
+    updateMetronomeMeterMessage();
+    metronomeMessage.textContent += ' Playback speed scales the effective pulse rate.';
   } catch (err) {
     metronomeMessage.textContent = err.message;
   }
@@ -492,8 +801,8 @@ async function startMetronome() {
 function stopMetronome() {
   if (metronomeTimer) clearInterval(metronomeTimer);
   metronomeTimer = null;
-  nextBeatTime = null;
-  lastMetronomeMediaTime = null;
+  nextBeatAudioTime = null;
+  nextBeatIndex = 0;
 }
 
 function formatTime(seconds) {
@@ -505,7 +814,13 @@ function formatTime(seconds) {
   return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}` : `${minutes}:${String(secs).padStart(2, '0')}`;
 }
 function updateTimeDisplay() {
-  timeDisplay.textContent = `${formatTime(audioPlayer.currentTime)} / ${formatTime(audioPlayer.duration)}`;
+  const current = Number.isFinite(audioPlayer.currentTime) ? audioPlayer.currentTime : 0;
+  const duration = Number.isFinite(audioPlayer.duration) ? audioPlayer.duration : 0;
+  timeDisplay.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
+  if (playbackSeek && !playbackSeek.matches(':active')) {
+    playbackSeek.max = String(Math.max(1, Math.round(duration * 10)));
+    playbackSeek.value = String(Math.round(current * 10));
+  }
 }
 function updateLoopUI() {
   loopStartDisplay.textContent = loopStart === null ? 'Not set' : formatTime(loopStart);
@@ -539,6 +854,7 @@ function resetLoop() {
   loopMessage.textContent = 'Set A and B while playing or seeking, then turn looping on.';
   saveTrackSettings();
 }
+playbackSeek.addEventListener('input', () => { if (Number.isFinite(audioPlayer.duration)) audioPlayer.currentTime = Math.min(audioPlayer.duration, Number(playbackSeek.value) / 10); });
 rewindButton.addEventListener('click', () => { audioPlayer.currentTime = Math.max(0, (audioPlayer.currentTime || 0) - 5); });
 forwardButton.addEventListener('click', () => {
   const end = Number.isFinite(audioPlayer.duration) ? audioPlayer.duration : Infinity;
@@ -560,10 +876,11 @@ audioPlayer.addEventListener('pause', () => {
   for (const player of stemPlayers.values()) player.audio.pause();
 });
 audioPlayer.addEventListener('seeking', () => { syncStemPlayers(true); resetMetronomeGrid(); });
-audioPlayer.addEventListener('seeked', () => syncStemPlayers(true));
-audioPlayer.addEventListener('ratechange', () => { syncStemPlayers(true); updateMetronomeBpmDisplay(); });
+audioPlayer.addEventListener('seeked', () => { syncStemPlayers(true); updateCurrentNote(true); });
+audioPlayer.addEventListener('ratechange', () => { syncStemPlayers(true); updateMetronomeBpmDisplay(); resetMetronomeGrid(); });
 audioPlayer.addEventListener('timeupdate', () => {
   updateTimeDisplay();
+  updateCurrentNote();
   if (loopEnabled && loopStart !== null && loopEnd !== null && audioPlayer.currentTime >= loopEnd) {
     audioPlayer.currentTime = loopStart;
   }
@@ -642,16 +959,26 @@ document.addEventListener('keydown', event => {
 });
 
 function loadCompletedTrack(job, fromLibrary = false) {
+  if (noteAnalysisPollTimer) { clearTimeout(noteAnalysisPollTimer); noteAnalysisPollTimer = null; }
+  noteAnalysisRequestToken++;
   audioPlayer.pause(); stopMetronome(); stopStemPlayers();
-  metronomeMuted = false; metronomeBpmInput = null; metronomeLevelInput = null; metronomeLevelValue = null; metronomeMuteButton = null; metronomeSoloButton = null;
-  playerArea.hidden = false; mixerEmptyState.hidden = true; separatorPanel.hidden = true; jobProgress.hidden = true; currentJobId = job.id;
+  metronomeMuted = false; metronomeDownbeatOffset = 0; metronomeBpmInput = null; metronomeLevelInput = null; metronomeLevelValue = null; metronomeMuteButton = null; metronomeSoloButton = null;
+  playerArea.hidden = false; mixerEmptyState.hidden = true; separatorPanel.hidden = true; jobProgress.hidden = true; currentJobId = job.id; setPracticeMode(practiceMode, false);
   document.querySelector('#result-filename').textContent = job.title || (job.filename || 'Backing track').replace(/\.[^.]+$/, '');
   audioPlayer.src = job.backing_url; audioPlayer.volume = masterGain(); audioPlayer.playbackRate = 1; speedSelect.value = '1';
   loopStart = null; loopEnd = null; loopEnabled = false; updateLoopUI(); updateTimeDisplay();
+  currentTrackBpm = job.bpm == null ? null : Number(job.bpm);
+  currentTrackTimeSignature = job.time_signature || '';
   sourceBpmInput.value = job.bpm == null ? '' : String(job.bpm);
   downloadLink.href = job.download_url; currentStems = job.stems || {};
+  const noteChoices = ['bass', 'guitar'].filter(name => Boolean(currentStems[name]));
+  noteStemSelect.replaceChildren();
+  for (const name of noteChoices) { const option = document.createElement('option'); option.value = name; option.textContent = name[0].toUpperCase() + name.slice(1); noteStemSelect.append(option); }
+  if (!noteChoices.length) { const option = document.createElement('option'); option.value = 'bass'; option.textContent = 'Bass (not available)'; noteStemSelect.append(option); }
+  noteStemSelect.value = noteChoices.includes('bass') ? 'bass' : (noteChoices[0] || 'bass');
   mixerModelLabel.textContent = job.model === 'htdemucs_6s' ? '6 stems · vocals, drums, bass, guitar, piano, other' : '4 stems · vocals, drums, bass, other';
   renderStems(currentStems);
+  loadPitchAnalysis(noteStemSelect.value);
   restoreTrackSettings(job.id);
   jobMessage.textContent = `${job.title || (job.filename || 'Track').replace(/\.[^.]+$/, '')}${job.artist ? ' · ' + job.artist : ''}${fromLibrary ? ' · Loaded from your library' : ' · Saved to your library'}`;
   setProgress('completed');

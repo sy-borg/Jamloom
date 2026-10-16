@@ -1,4 +1,4 @@
-# Jamloom 0.3.1
+# Jamloom 0.4.1
 
 A local-first AI music practice prototype. Upload a track, use Demucs to separate instruments, and play along with a backing track. The prototype also includes a first **session coordination server** for invite-code rooms and shared playback state.
 
@@ -119,3 +119,64 @@ Bugfix release: avoid passing `status` twice when a separation completes and the
 
 
 Jamloom 0.3.1 adds editable BPM and time-signature metadata to library tracks. When a track has a BPM, it pre-fills the Original BPM field in the tempo controls. Values remain manually editable; automatic detection is planned for a future release.
+
+
+## Jamloom 0.3.2
+
+- The metronome uses saved track BPM as its initial pulse rate when that value is within the supported 30–300 BPM range; browser-local metronome settings still take precedence when restored.
+- Metronome accents follow the saved time signature: the first pulse is strong, 4/4 also gives beat 3 a lighter accent, and compound meters such as 6/8, 9/8 and 12/8 group eighth notes in threes and accent the larger pulse.
+- For compound meters with an eighth-note denominator, metronome BPM is interpreted as dotted-quarter pulses per minute. For other meters, BPM is the manually chosen metronome beat rate.
+- The metronome remains aligned to the media timeline and follows playback speed, seeking and looping. Tracks without a time signature use a default 4/4 accent pattern without changing their saved metadata.
+
+
+## Jamloom 0.3.3
+
+- Fix metronome scheduling for slow pulses and compound meters such as 6/8. Normal forward updates of the media clock no longer repeatedly reset the beat grid; large jumps and seeking still realign it.
+
+
+## Jamloom 0.3.4
+
+- Reworks metronome click scheduling to use the Web Audio clock instead of repeatedly deriving click timing from media-clock updates. This is intended to prevent the metronome from stopping after only a few clicks when media-time updates arrive irregularly.
+- The song position is still used to align the beat grid when starting or resetting; seeking and playback-speed changes re-align the metronome.
+- Missed beats after a browser timer pause are skipped instead of firing as a burst when the timer resumes.
+
+
+## Metronome synchronization (0.3.6)
+
+The mixer metronome provides **Set downbeat** to anchor beat 1 at the current playback position, and **Reset cycle** to make the next metronome pulse beat 1. The downbeat offset is saved with that song's browser-specific practice settings and restored when the song is reopened in the same browser. The offset is measured in audio timeline seconds, so playback-speed changes do not change the saved anchor.
+
+
+### Practice Mode (0.3.6)
+- Added a touch-friendly Practice Mode with larger transport controls and a seek slider.
+- Added a note-display placeholder to establish the layout for future instrument-stem pitch analysis; no notes are fabricated or detected in this release.
+- Toggle between Practice Mode and the full mixer at any time. The preference is remembered in the current browser.
+
+
+## 0.3.7
+
+- Hidden the unfinished Jam session panel from the interface for now. The existing session UI markup, client-side code, API and server implementation are retained for future development.
+
+## Version 0.3.8
+
+Adds experimental, local pitch estimation for separated bass and guitar stems. After separation, Jamloom automatically analyzes available bass and guitar stems in the background; playback is available immediately. Results are saved beside the library track and reused when the track is reopened. You can rerun analysis manually if needed. The current note and a short strip of nearby detected notes follow the playback position, and tapping a note seeks to its timestamp. This lightweight autocorrelation-based estimator is intended for mostly monophonic lines; it is not polyphonic transcription or verified sheet music. Notes may be missed or misidentified, especially with chords, fast passages, distortion, harmonics, or separation artifacts. Analysis is limited to the first 15 minutes of a stem. NumPy and SoundFile are already part of the app requirements.
+
+
+## Version 0.4.0
+
+- Improved bass/guitar pitch estimates with a conservative spectral check for octave-low detections.
+- Corrected isolated one-frame octave flips when the neighboring frames agree.
+- Displayed estimated frequency in Hz beside each detected note to help diagnose octave errors.
+- Existing saved note-analysis JSON files remain readable, but rerun analysis on a stem to benefit from the improved detector.
+
+
+## 0.4.0 — Automatic note suggestions
+
+After Demucs separation finishes and the backing mix is saved, Jamloom analyzes available bass and guitar stems in the background. Playback is available immediately; note analysis does not block the practice workflow. Results and per-stem analysis status are saved with the library track. If analysis fails, the separated track remains usable and the user can retry manually.
+
+
+## Version 0.4.1
+
+- Added an editable note-arrangement layer separate from automatic pitch-analysis suggestions.
+- Users can select a detected note, change its pitch and start/end times, add a note at the playhead, or delete a note.
+- Saved arrangements persist with the library track and stem, and load in place of suggestions on subsequent opens. The original automatic analysis file is not overwritten.
+- Arrangement changes are drafts until the user explicitly saves them.
