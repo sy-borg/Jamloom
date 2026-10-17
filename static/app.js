@@ -44,8 +44,16 @@ const metronomeEffectiveBpm = document.querySelector('#metronome-effective-bpm')
 const metronomeMessage = document.querySelector('#metronome-message');
 const libraryList = document.querySelector('#library-list');
 const libraryStatus = document.querySelector('#library-status');
+const libraryStorageSummary = document.querySelector('#library-storage-summary');
 const librarySearch = document.querySelector('#library-search');
 const librarySort = document.querySelector('#library-sort');
+const libraryShowMore = document.querySelector('#library-show-more');
+const LIBRARY_PAGE_SIZE = 5;
+let libraryVisibleLimit = LIBRARY_PAGE_SIZE;
+const editTrackDialog = document.querySelector('#edit-track-dialog');
+const editTrackForm = document.querySelector('#edit-track-form');
+const editTrackStatus = document.querySelector('#edit-track-status');
+let editingLibraryTrack = null;
 const separatorPanel = document.querySelector('#separator-panel');
 const showSeparatorButton = document.querySelector('#show-separator');
 const hideSeparatorButton = document.querySelector('#hide-separator');
@@ -325,6 +333,15 @@ function restoreTrackSettings(trackId) {
   else metronomeDownbeatOffset = 0;
   updateLoopUI(); updateStemAudioLevels(); resetMetronomeGrid(); saveTrackSettings();
 }
+function formatLibrarySize(bytes) {
+  const size = Math.max(0, Number(bytes) || 0);
+  if (size < 1024) return `${size} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = size / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  return `${value.toLocaleString(undefined, {maximumFractionDigits: value >= 100 ? 0 : 1})} ${units[unit]}`;
+}
 function formatLibraryDuration(seconds) {
   if (!Number.isFinite(Number(seconds))) return 'Duration unknown';
   const total = Math.max(0, Math.floor(Number(seconds)));
@@ -339,13 +356,25 @@ function renderLibrary() {
     if (sort === 'artist') return String(a.artist || '').localeCompare(String(b.artist || ''), undefined, {sensitivity:'base'}) || String(a.title || a.filename || '').localeCompare(String(b.title || b.filename || ''), undefined, {sensitivity:'base'});
     if (sort === 'album') return String(a.album || '').localeCompare(String(b.album || ''), undefined, {sensitivity:'base'}) || String(a.title || a.filename || '').localeCompare(String(b.title || b.filename || ''), undefined, {sensitivity:'base'});
     if (sort === 'duration') return Number(b.duration || 0) - Number(a.duration || 0);
+    if (sort === 'storage') return Number(b.storage_bytes || 0) - Number(a.storage_bytes || 0);
     return String(b.created_at || '').localeCompare(String(a.created_at || ''));
   });
   libraryList.replaceChildren();
+  libraryShowMore.hidden = true;
   if (!libraryTracks.length) { libraryStatus.textContent = 'Your library is empty. Create a backing track to get started.'; return; }
-  libraryStatus.textContent = `${tracks.length} of ${libraryTracks.length} song${libraryTracks.length === 1 ? '' : 's'} shown · available to everyone using this Jamloom instance.`;
+  const searching = query.length > 0;
+  const visibleTracks = searching ? tracks : tracks.slice(0, libraryVisibleLimit);
+  if (searching) {
+    libraryStatus.textContent = `${tracks.length} matching song${tracks.length === 1 ? '' : 's'} · available to everyone using this Jamloom instance.`;
+  } else if (tracks.length > visibleTracks.length) {
+    libraryStatus.textContent = `Showing ${visibleTracks.length} of ${tracks.length} songs. Search to find any song, or show more below.`;
+    libraryShowMore.hidden = false;
+    libraryShowMore.textContent = `Show 5 more songs (${tracks.length - visibleTracks.length} remaining)`;
+  } else {
+    libraryStatus.textContent = `${tracks.length} song${tracks.length === 1 ? '' : 's'} in your library · available to everyone using this Jamloom instance.`;
+  }
   if (!tracks.length) { const empty = document.createElement('p'); empty.className = 'library-no-results'; empty.textContent = 'No songs match that search.'; libraryList.append(empty); return; }
-  for (const track of tracks) {
+  for (const track of visibleTracks) {
     const row = document.createElement('article'); row.className = 'library-item';
     const details = document.createElement('div'); details.className = 'library-item-details';
     const title = document.createElement('strong'); title.textContent = track.title || (track.filename || 'Untitled track').replace(/\.[^.]+$/, '');
@@ -354,32 +383,26 @@ function renderLibrary() {
     const date = track.created_at ? new Date(track.created_at).toLocaleDateString() : 'Saved';
     const model = track.model === 'htdemucs_6s' ? '6 stems' : '4 stems';
     const musicInfo = [track.bpm ? `${Number(track.bpm)} BPM` : '', track.time_signature || ''].filter(Boolean).join(' · ');
-    meta.textContent = [formatLibraryDuration(track.duration), model, musicInfo, date].filter(Boolean).join(' · ');
+    meta.textContent = [formatLibraryDuration(track.duration), model, formatLibrarySize(track.storage_bytes), musicInfo, date].filter(Boolean).join(' · ');
     details.append(title, artist, meta);
     const actions = document.createElement('div'); actions.className = 'library-item-actions';
-    const open = document.createElement('button'); open.type = 'button'; open.className = 'button secondary'; open.textContent = 'Open mixer';
+    const open = document.createElement('button'); open.type = 'button'; open.className = 'button secondary'; open.textContent = 'Open';
     open.addEventListener('click', () => loadLibraryTrack(track.id));
     const edit = document.createElement('button'); edit.type = 'button'; edit.className = 'button ghost'; edit.textContent = 'Edit details';
-    edit.addEventListener('click', async () => {
-      const nextTitle = window.prompt('Track title:', track.title || (track.filename || '').replace(/\.[^.]+$/, '')); if (nextTitle === null) return;
-      const nextArtist = window.prompt('Artist:', track.artist || ''); if (nextArtist === null) return;
-      const nextAlbum = window.prompt('Album:', track.album || ''); if (nextAlbum === null) return;
-      const nextBpmText = window.prompt('Track BPM (leave empty if unknown):', track.bpm == null ? '' : String(track.bpm)); if (nextBpmText === null) return;
-      const nextBpm = nextBpmText.trim() === '' ? null : Number(nextBpmText);
-      if (nextBpm !== null && (!Number.isFinite(nextBpm) || nextBpm < 1 || nextBpm > 400)) { libraryStatus.textContent = 'BPM must be a number between 1 and 400, or left empty.'; return; }
-      const nextSignature = window.prompt('Time signature (e.g. 4/4, 3/4, 6/8; leave empty if unknown):', track.time_signature || ''); if (nextSignature === null) return;
-      if (nextSignature.trim() && !/^(?:[1-9]|1[0-6])\s*\/\s*(?:1|2|4|8|16)$/.test(nextSignature.trim())) { libraryStatus.textContent = 'Use a time signature such as 4/4, 3/4 or 6/8 (numerator 1–16; denominator 1, 2, 4, 8 or 16).'; return; }
-      edit.disabled = true;
-      try {
-        const res = await fetch(`/api/library/${encodeURIComponent(track.id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title:nextTitle, artist:nextArtist, album:nextAlbum, bpm:nextBpm, time_signature:nextSignature.trim()})});
-        const result = await res.json(); if (!res.ok) throw new Error(result.detail || 'Could not update track details.');
-        await loadLibrary();
-        if (currentJobId === track.id) document.querySelector('#result-filename').textContent = result.track.title || result.track.filename || 'Backing track';
-      } catch (err) { libraryStatus.textContent = err.message; edit.disabled = false; }
+    edit.addEventListener('click', () => {
+      editingLibraryTrack = track;
+      document.querySelector('#edit-track-title').value = track.title || (track.filename || '').replace(/\.[^.]+$/, '');
+      document.querySelector('#edit-track-artist').value = track.artist || '';
+      document.querySelector('#edit-track-album').value = track.album || '';
+      document.querySelector('#edit-track-bpm').value = track.bpm == null ? '' : String(track.bpm);
+      document.querySelector('#edit-track-signature').value = track.time_signature || '';
+      editTrackStatus.textContent = '';
+      editTrackDialog.showModal();
+      document.querySelector('#edit-track-title').focus();
     });
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button ghost library-delete'; remove.textContent = 'Delete';
     remove.addEventListener('click', async () => {
-      if (!window.confirm(`Delete “${track.title || track.filename || 'this track'}” and its separated audio from the shared library? This cannot be undone.`)) return;
+      if (!window.confirm(`Delete “${track.title || track.filename || 'this track'}” and its separated audio (${formatLibrarySize(track.storage_bytes)}) from the shared library? This cannot be undone.`)) return;
       remove.disabled = true;
       try { const res = await fetch(`/api/library/${encodeURIComponent(track.id)}`, {method:'DELETE'}); const result = await res.json(); if (!res.ok) throw new Error(result.detail || 'Delete failed.');
         if (currentJobId === track.id) { audioPlayer.pause(); stopMetronome(); stopStemPlayers(); playerArea.hidden = true; mixerEmptyState.hidden = false; currentJobId = null; }
@@ -395,11 +418,48 @@ async function loadLibrary() {
     const response = await fetch('/api/library'); const data = await response.json();
     if (!response.ok) throw new Error(data.detail || 'Could not load library.');
     libraryTracks = data.tracks || [];
+    libraryStorageSummary.textContent = `Library storage: ${formatLibrarySize(data.total_storage_bytes)} across ${data.count || 0} song${data.count === 1 ? '' : 's'}. Sizes include originals, separated stems, backing mixes and saved note data.`;
     renderLibrary();
   } catch (err) { libraryStatus.textContent = `Library could not be loaded: ${err.message}`; }
 }
-librarySearch.addEventListener('input', renderLibrary);
-librarySort.addEventListener('change', renderLibrary);
+function closeEditTrackDialog() {
+  if (editTrackDialog.open) editTrackDialog.close();
+  editingLibraryTrack = null;
+}
+document.querySelector('#close-edit-track').addEventListener('click', closeEditTrackDialog);
+document.querySelector('#cancel-edit-track').addEventListener('click', closeEditTrackDialog);
+editTrackDialog.addEventListener('click', event => { if (event.target === editTrackDialog) closeEditTrackDialog(); });
+editTrackForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!editingLibraryTrack) return;
+  const title = document.querySelector('#edit-track-title').value.trim();
+  const artist = document.querySelector('#edit-track-artist').value.trim();
+  const album = document.querySelector('#edit-track-album').value.trim();
+  const bpmText = document.querySelector('#edit-track-bpm').value.trim();
+  const bpm = bpmText === '' ? null : Number(bpmText);
+  const signature = document.querySelector('#edit-track-signature').value.trim();
+  if (!title) { editTrackStatus.textContent = 'Please enter a title.'; return; }
+  if (bpm !== null && (!Number.isFinite(bpm) || bpm < 1 || bpm > 400)) { editTrackStatus.textContent = 'BPM must be between 1 and 400, or left empty.'; return; }
+  if (signature && !/^(?:[1-9]|1[0-6])\s*\/\s*(?:1|2|4|8|16)$/.test(signature)) { editTrackStatus.textContent = 'Use a time signature such as 4/4, 3/4 or 6/8 (numerator 1–16; denominator 1, 2, 4, 8 or 16).'; return; }
+  const saveButton = document.querySelector('#save-edit-track');
+  saveButton.disabled = true;
+  editTrackStatus.textContent = 'Saving…';
+  try {
+    const res = await fetch(`/api/library/${encodeURIComponent(editingLibraryTrack.id)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({title, artist, album, bpm, time_signature:signature})});
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.detail || 'Could not update track details.');
+    const trackId = editingLibraryTrack.id;
+    closeEditTrackDialog();
+    await loadLibrary();
+    if (currentJobId === trackId) document.querySelector('#result-filename').textContent = result.track.title || result.track.filename || 'Backing track';
+  } catch (err) {
+    editTrackStatus.textContent = err.message;
+  } finally { saveButton.disabled = false; }
+});
+
+librarySearch.addEventListener('input', () => { libraryVisibleLimit = LIBRARY_PAGE_SIZE; renderLibrary(); });
+librarySort.addEventListener('change', () => { libraryVisibleLimit = LIBRARY_PAGE_SIZE; renderLibrary(); });
+libraryShowMore.addEventListener('click', () => { libraryVisibleLimit += LIBRARY_PAGE_SIZE; renderLibrary(); });
 showSeparatorButton.addEventListener('click', () => { separatorPanel.hidden = false; separatorPanel.scrollIntoView({behavior:'smooth', block:'start'}); });
 hideSeparatorButton.addEventListener('click', () => { if (pollTimer || submitButton.disabled) return; separatorPanel.hidden = true; errorBox.hidden = true; });
 

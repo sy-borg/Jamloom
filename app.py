@@ -34,7 +34,7 @@ MODELS = {
     "htdemucs_6s": {"vocals", "drums", "bass", "guitar", "piano", "other"},
 }
 
-app = FastAPI(title="Jamloom", version="0.4.1")
+app = FastAPI(title="Jamloom", version="0.4.7")
 app.include_router(sessions_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -600,12 +600,34 @@ async def save_note_arrangement(job_id: str, stem_name: str, payload: dict[str, 
     return {"saved": True, "events": normalized, "message": f"Saved {len(normalized)} arrangement notes."}
 
 
+def directory_size_bytes(directory: Path) -> int:
+    """Return the size of regular files stored under a track directory."""
+    total = 0
+    try:
+        for path in directory.rglob("*"):
+            try:
+                if path.is_file() and not path.is_symlink():
+                    total += path.stat().st_size
+            except OSError:
+                # A file may disappear while the library is being inspected.
+                continue
+    except OSError:
+        return total
+    return total
+
+
 @app.get("/api/library")
 async def list_library():
     with jobs_lock:
         tracks = [dict(job) for job in jobs.values() if job.get("status") == "completed" and job.get("library_id", job.get("id")) == job.get("id")]
     tracks.sort(key=lambda track: track.get("created_at", ""), reverse=True)
-    return {"tracks": tracks, "count": len(tracks)}
+    total_storage_bytes = 0
+    for track in tracks:
+        folder = LIBRARY_DIR / str(track.get("id", ""))
+        size = directory_size_bytes(folder) if folder.is_dir() else 0
+        track["storage_bytes"] = size
+        total_storage_bytes += size
+    return {"tracks": tracks, "count": len(tracks), "total_storage_bytes": total_storage_bytes}
 
 
 @app.patch("/api/library/{track_id}")

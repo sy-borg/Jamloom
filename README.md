@@ -1,3 +1,7 @@
+## Version 0.4.8
+
+- Added the MIT License for Jamloom source code, copyright 2026 Jamloom contributors. Third-party dependencies and pretrained model weights retain their own licensing terms.
+
 ## Version 0.4.3
 
 - Added Jamloom favicon (SVG with ICO fallback) and linked it from the app page.
@@ -184,3 +188,8 @@ After Demucs separation finishes and the backing mix is saved, Jamloom analyzes 
 - Users can select a detected note, change its pitch and start/end times, add a note at the playhead, or delete a note.
 - Saved arrangements persist with the library track and stem, and load in place of suggestions on subsequent opens. The original automatic analysis file is not overwritten.
 - Arrangement changes are drafts until the user explicitly saves them.
+
+
+## License
+
+Jamloom's own source code is licensed under the MIT License; see `LICENSE`. Third-party dependencies, FFmpeg builds, and pretrained model weights are subject to their respective licenses and terms. Licensing of pretrained Demucs weights is separate from the Demucs source-code license; review the applicable terms before any commercial use.

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Jamloom — play your part</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=0.4.3">
-  <link rel="alternate icon" href="/static/favicon.ico?v=0.4.3">
-  <link rel="stylesheet" href="/static/style.css?v=0.4.3">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=0.4.7">
+  <link rel="alternate icon" href="/static/favicon.ico?v=0.4.7">
+  <link rel="stylesheet" href="/static/style.css?v=0.4.7">
 </head>
 <body>
   <main class="shell">
@@ -18,11 +18,28 @@
 
     <section class="panel library-panel" aria-labelledby="library-heading">
       <div class="section-heading library-title-row"><span class="step">01</span><div class="heading-copy"><h2 id="library-heading">Your library</h2><p>Choose a song to practise, or prepare a new backing track.</p></div><button id="show-separator" type="button">+ Create backing track</button></div>
-      <div class="library-tools"><label class="library-search-label">Search library<input id="library-search" type="search" placeholder="Title, artist or album…" autocomplete="off"></label><label class="library-sort-label">Sort by<select id="library-sort"><option value="recent">Recently added</option><option value="title">Title</option><option value="artist">Artist</option><option value="album">Album</option><option value="duration">Duration</option></select></label></div>
+      <div class="library-tools"><label class="library-search-label">Find a song<input id="library-search" type="search" placeholder="Search title, artist or album…" autocomplete="off"></label><label class="library-sort-label">Sort by<select id="library-sort"><option value="recent">Recently added</option><option value="title">Title</option><option value="artist">Artist</option><option value="album">Album</option><option value="duration">Duration</option><option value="storage">Storage size</option></select></label></div>
+      <div id="library-storage-summary" class="library-storage-summary" role="status">Calculating library storage…</div>
       <div id="library-status" class="library-status" role="status">Loading your library…</div>
       <div id="library-list" class="library-list"></div>
+      <button id="library-show-more" class="button ghost library-show-more" type="button" hidden>Show more songs</button>
       <p class="hint">Practice settings are remembered in this browser. Song files and metadata are shared by everyone using this Jamloom instance.</p>
     </section>
+
+    <dialog id="edit-track-dialog" class="edit-track-dialog" aria-labelledby="edit-track-heading">
+      <form id="edit-track-form">
+        <div class="dialog-heading"><div><h2 id="edit-track-heading">Edit song details</h2><p>Update the library information for this track.</p></div><button id="close-edit-track" class="button ghost dialog-close" type="button" aria-label="Close">×</button></div>
+        <div class="dialog-fields">
+          <label>Title<input id="edit-track-title" name="title" maxlength="200" required></label>
+          <label>Artist<input id="edit-track-artist" name="artist" maxlength="200"></label>
+          <label>Album<input id="edit-track-album" name="album" maxlength="200"></label>
+          <label>Tempo (BPM)<input id="edit-track-bpm" name="bpm" type="number" min="1" max="400" step="0.1" placeholder="Unknown"></label>
+          <label>Time signature<input id="edit-track-signature" name="time_signature" placeholder="e.g. 4/4, 6/8"></label>
+        </div>
+        <p id="edit-track-status" class="dialog-status" role="status"></p>
+        <div class="dialog-actions"><button id="cancel-edit-track" class="button ghost" type="button">Cancel</button><button id="save-edit-track" type="submit">Save changes</button></div>
+      </form>
+    </dialog>
 
     <section class="panel separator-panel" id="separator-panel" hidden>
       <div class="section-heading"><span class="step">03</span><div><h2>Create backing track</h2><p>Choose a song and separate it into stems. Processing runs locally on this machine.</p></div><button id="hide-separator" class="button ghost" type="button">Cancel</button></div>
@@ -165,8 +182,8 @@
         <p class="hint">This is coordination groundwork: it broadcasts shared playback state between connected browsers. It does not yet stream microphones or automatically synchronise the audio element.</p>
       </div>
     </section>
-    <footer><span>JAMLOOM <span class="version">0.4.3</span></span><span>Local prototype · Powered by Demucs</span></footer>
+    <footer><span>JAMLOOM <span class="version">0.4.7</span></span><span>Local prototype · Powered by Demucs</span></footer>
   </main>
-  <script src="/static/app.js?v=0.4.3"></script>
+  <script src="/static/app.js?v=0.4.7"></script>
 </body>
 </html>
