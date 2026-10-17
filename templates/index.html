@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Jamloom — play your part</title>
-  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=0.4.7">
-  <link rel="alternate icon" href="/static/favicon.ico?v=0.4.7">
-  <link rel="stylesheet" href="/static/style.css?v=0.4.7">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=0.4.11">
+  <link rel="alternate icon" href="/static/favicon.ico?v=0.4.11">
+  <link rel="stylesheet" href="/static/style.css?v=0.4.11">
 </head>
 <body>
   <main class="shell">
@@ -71,6 +71,19 @@
         <audio id="audio-player" controls preload="metadata"></audio>
         <section id="note-display" class="note-display" aria-label="Note display">
           <div class="note-display-heading"><span class="note-symbol">♪</span><div><strong>Note detection</strong><span>Experimental · octave checks · best with single bass notes</span></div></div>
+          <section class="musicxml-panel" aria-label="Imported MusicXML score">
+            <div class="musicxml-heading"><div><strong>Guitar tab / notation</strong><span>Import an uncompressed MusicXML export from TuxGuitar or another notation app.</span></div></div>
+            <div class="musicxml-import-row"><input id="musicxml-file" type="file" accept=".musicxml,.xml,application/vnd.recordare.musicxml+xml,application/xml" aria-label="Choose MusicXML file"><button id="import-musicxml-button" class="button secondary" type="button">Import score</button></div>
+            <p id="musicxml-status" class="note-analysis-status" role="status">No score imported for this song yet.</p>
+            <div id="musicxml-timing-controls" class="musicxml-timing-controls" hidden>
+              <label>Score tempo (BPM)<input id="musicxml-tempo" type="number" min="20" max="300" step="0.1" value="120"></label>
+              <label>Audio offset (seconds)<input id="musicxml-offset" type="number" min="-120" max="120" step="0.05" value="0"></label>
+              <button id="musicxml-reset-timing" class="button secondary" type="button">Reset</button>
+            </div>
+            <p class="musicxml-timing-help">Adjust tempo to match the recording, then use the offset to align the score's beginning. Positive offset means the score starts later in the audio. Settings are saved for this song in this browser.</p>
+            <label id="musicxml-part-label" class="musicxml-part-label" hidden>Part / instrument<select id="musicxml-part-select"></select></label>
+            <div id="musicxml-score" class="musicxml-score" hidden></div>
+          </section>
           <div class="note-analysis-controls">
             <label for="note-stem-select">Instrument
               <select id="note-stem-select"><option value="bass">Bass</option><option value="guitar">Guitar</option></select>
@@ -79,17 +92,21 @@
           </div>
           <p id="note-analysis-status" class="note-analysis-status" role="status">Note suggestions are generated automatically after separation. They may take a little while; you can practise while analysis continues.</p>
           <div class="note-current"><span id="current-note-name" class="note-placeholder">—</span><div><strong id="current-note-label">No note at this position</strong><span id="current-note-time">Play or seek to explore detected notes.</span></div></div>
+          <div id="guitar-tab-view" class="guitar-tab-view" aria-label="Audio-aligned instrument tablature" hidden></div>
           <div id="note-events" class="note-events"><span class="note-events-empty">Detected notes will appear here after analysis.</span></div>
           <section class="note-editor" aria-label="Edit note arrangement">
-            <div class="note-editor-heading"><strong>Edit suggested notes</strong><span>Tap a note above to select it.</span></div>
+            <div class="note-editor-heading"><strong>Edit suggested notes / guitar tab</strong><span>Tab positions are suggestions; choose a string and fret for the selected note.</span></div>
             <div class="note-editor-fields">
               <label>Pitch <input id="edit-note-pitch" type="text" inputmode="text" maxlength="5" value="C2" autocomplete="off" aria-label="Note pitch, for example C#2"></label>
               <label>Start (s) <input id="edit-note-start" type="number" min="0" step="0.01" value="0"></label>
               <label>End (s) <input id="edit-note-end" type="number" min="0.01" step="0.01" value="0.2"></label>
+              <label>Instrument string <select id="edit-note-string"><option value="">Unassigned</option><option value="1">1 · high E</option><option value="2">2 · B</option><option value="3">3 · G</option><option value="4">4 · D</option><option value="5">5 · A</option><option value="6">6 · low E</option></select></label>
+              <label>Fret <input id="edit-note-fret" type="number" min="0" max="24" step="1" placeholder="—"></label>
             </div>
             <div class="note-editor-actions">
               <button id="apply-note-edit" class="button secondary" type="button">Apply edit</button>
               <button id="add-note-event" class="button secondary" type="button">Add at playhead</button>
+              <button id="add-chord-tone" class="button secondary" type="button">Add chord tone</button>
               <button id="delete-note-event" class="button ghost" type="button">Delete note</button>
               <button id="save-note-arrangement" class="button" type="button">Save arrangement</button>
             </div>
@@ -182,8 +199,8 @@
         <p class="hint">This is coordination groundwork: it broadcasts shared playback state between connected browsers. It does not yet stream microphones or automatically synchronise the audio element.</p>
       </div>
     </section>
-    <footer><span>JAMLOOM <span class="version">0.4.7</span></span><span>Local prototype · Powered by Demucs</span></footer>
+    <footer><span>JAMLOOM <span class="version">0.4.11</span></span><span>Local prototype · Powered by Demucs</span></footer>
   </main>
-  <script src="/static/app.js?v=0.4.7"></script>
+  <script src="/static/app.js?v=0.4.11"></script>
 </body>
 </html>

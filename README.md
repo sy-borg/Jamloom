@@ -1,3 +1,33 @@
+## Version 0.4.14
+- Added a four-string bass tablature view using standard bass tuning (G–D–A–E, high to low), alongside the existing six-string guitar tab.
+- Bass note positions use bass tuning when suggesting and validating string/fret assignments; switching the instrument updates the string editor.
+- The same timing and current-chord highlighting is used for bass and guitar. Existing note timing remains unchanged.
+
+## Version 0.4.13
+
+- Synchronized highlighting across the active chord: all note buttons sharing the current onset highlight together, matching the corresponding tablature column.
+- Strengthened the fretboard/tab highlight with a bright chord-tone marker, cyan column background, and clearer button glow.
+
+## Version 0.4.12
+
+- Improved guitar-tab playback highlighting with a brighter, higher-contrast active note.
+- Notes sharing the same onset are grouped into one tab column, allowing chord tones to appear vertically together.
+- Added “Add chord tone” to create another editable note at the selected note’s timing (or at the playhead if no note is selected). Set its pitch and guitar position, then save the arrangement.
+
+## Version 0.4.11
+
+- Added an audio-aligned six-string guitar tablature view based on detected guitar note events.
+- Shows suggested standard-tuning string/fret positions; positions can be edited per note and saved with the arrangement.
+- Guitar string/fret choices are validated against the note pitch. Audio timestamps remain authoritative; imported-score tempo alignment is not used for this view.
+
+## Version 0.4.10
+
+- Added per-song MusicXML timing adjustment: editable score tempo and audio offset, saved in the current browser. This helps align a score whose tempo is unknown or differs from the recording. Positive offset places the score later in the audio; Reset restores the imported tempo and zero offset.
+
+## Version 0.4.9
+
+- Added MusicXML import for an open library track, with part selection and a measure strip synchronized to playback. Preserves guitar string/fret data when present; clicking a measure seeks to its approximate start. Uncompressed partwise `.musicxml` and `.xml` are supported; compressed `.mxl` and timewise MusicXML are not supported yet.
+
 ## Version 0.4.8
 
 - Added the MIT License for Jamloom source code, copyright 2026 Jamloom contributors. Third-party dependencies and pretrained model weights retain their own licensing terms.
@@ -193,3 +223,9 @@ After Demucs separation finishes and the backing mix is saved, Jamloom analyzes 
 ## License
 
 Jamloom's own source code is licensed under the MIT License; see `LICENSE`. Third-party dependencies, FFmpeg builds, and pretrained model weights are subject to their respective licenses and terms. Licensing of pretrained Demucs weights is separate from the Demucs source-code license; review the applicable terms before any commercial use.
+
+
+## 0.4.11
+- Added an audio-aligned six-string guitar tablature view based on detected guitar note events.
+- Shows suggested standard-tuning string/fret positions; positions can be edited per note and saved with the arrangement.
+- Guitar string/fret choices are validated against the note pitch. Audio timestamps remain authoritative; imported-score tempo alignment is not used for this view.

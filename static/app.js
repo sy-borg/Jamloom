@@ -85,23 +85,128 @@ let noteAnalysisPollTimer = null;
 let noteAnalysisRequestToken = 0;
 const noteStemSelect = document.querySelector('#note-stem-select');
 const analyzeNotesButton = document.querySelector('#analyze-notes-button');
+noteStemSelect.addEventListener('change', () => {
+  const isBass = noteStemSelect.value === 'bass';
+  const stringLabel = editNoteString.closest('label');
+  if (stringLabel) stringLabel.firstChild.textContent = isBass ? 'Bass string ' : 'Guitar string ';
+  const choices = isBass ? [['1','1 · high G'],['2','2 · D'],['3','3 · A'],['4','4 · low E']] : [['1','1 · high E'],['2','2 · B'],['3','3 · G'],['4','4 · D'],['5','5 · A'],['6','6 · low E']];
+  editNoteString.replaceChildren(new Option('Unassigned', ''));
+  choices.forEach(([value, label]) => editNoteString.add(new Option(label, value)));
+  fillNoteEditor(); renderNoteEvents();
+});
+
 const noteAnalysisStatus = document.querySelector('#note-analysis-status');
 const currentNoteName = document.querySelector('#current-note-name');
 const currentNoteLabel = document.querySelector('#current-note-label');
 const currentNoteTime = document.querySelector('#current-note-time');
 const noteEventsContainer = document.querySelector('#note-events');
+const guitarTabView = document.querySelector('#guitar-tab-view');
 const editNotePitch = document.querySelector('#edit-note-pitch');
 const editNoteStart = document.querySelector('#edit-note-start');
 const editNoteEnd = document.querySelector('#edit-note-end');
+const editNoteString = document.querySelector('#edit-note-string');
+const editNoteFret = document.querySelector('#edit-note-fret');
 const applyNoteEditButton = document.querySelector('#apply-note-edit');
 const addNoteEventButton = document.querySelector('#add-note-event');
 const deleteNoteEventButton = document.querySelector('#delete-note-event');
 const saveNoteArrangementButton = document.querySelector('#save-note-arrangement');
 const noteEditorStatus = document.querySelector('#note-editor-status');
+const musicxmlFile = document.querySelector('#musicxml-file');
+const importMusicxmlButton = document.querySelector('#import-musicxml-button');
+const musicxmlStatus = document.querySelector('#musicxml-status');
+const musicxmlPartLabel = document.querySelector('#musicxml-part-label');
+const musicxmlPartSelect = document.querySelector('#musicxml-part-select');
+const musicxmlScore = document.querySelector('#musicxml-score');
+const musicxmlTimingControls = document.querySelector('#musicxml-timing-controls');
+const musicxmlTempoInput = document.querySelector('#musicxml-tempo');
+const musicxmlOffsetInput = document.querySelector('#musicxml-offset');
+const musicxmlResetTiming = document.querySelector('#musicxml-reset-timing');
+let importedMusicXml = null;
+let musicXmlDefaultTempo = 120;
+function musicXmlTimingKey() { return `jamloom-musicxml-timing-${currentJobId}`; }
+function readMusicXmlTiming() {
+  const saved = localStorage.getItem(musicXmlTimingKey());
+  if (saved) { try { const value = JSON.parse(saved); return {tempo: Number(value.tempo) || musicXmlDefaultTempo, offset: Number(value.offset) || 0}; } catch {} }
+  return {tempo: musicXmlDefaultTempo, offset: 0};
+}
+function saveMusicXmlTiming() {
+  if (!currentJobId) return;
+  const tempo = Math.min(300, Math.max(20, Number(musicxmlTempoInput.value) || musicXmlDefaultTempo));
+  const offset = Math.min(120, Math.max(-120, Number(musicxmlOffsetInput.value) || 0));
+  localStorage.setItem(musicXmlTimingKey(), JSON.stringify({tempo, offset}));
+  renderMusicXmlPart();
+}
+function renderMusicXmlPart() {
+  if (!importedMusicXml || !currentJobId) return;
+  const part = importedMusicXml.parts[Number(musicxmlPartSelect.value) || 0];
+  if (!part) return;
+  musicxmlScore.replaceChildren();
+  const tempo = Math.min(300, Math.max(20, Number(musicxmlTempoInput.value) || musicXmlDefaultTempo));
+  const audioOffset = Number(musicxmlOffsetInput.value) || 0;
+  const measureSeconds = measure => (Number(measure.beats || 4) * 60 / Math.max(tempo, 1));
+  let offset = 0;
+  for (const measure of part.measures) {
+    const measureStart = offset;
+    const card = document.createElement('button'); card.type = 'button'; card.className = 'musicxml-measure';
+    card.dataset.start = String(measureStart); card.title = `Seek to measure ${measure.number}`;
+    const heading = document.createElement('strong'); heading.textContent = `Measure ${measure.number}`; card.append(heading);
+    const tab = document.createElement('div'); tab.className = 'musicxml-measure-notes';
+    const notes = [...measure.notes].sort((a,b)=>a.beat-b.beat);
+    if (!notes.length) { const empty = document.createElement('span'); empty.className='musicxml-empty-measure'; empty.textContent='—'; tab.append(empty); }
+    for (const note of notes) {
+      const item = document.createElement('span'); item.className = 'musicxml-note';
+      const main = document.createElement('strong');
+      main.textContent = note.string != null && note.fret != null ? `${note.string}|${note.fret}` : (note.pitch || '♪');
+      const beat = document.createElement('small'); beat.textContent = `beat ${(Number(note.beat)+1).toFixed(2).replace(/\.00$/,'')}`;
+      item.append(main, beat); tab.append(item);
+    }
+    card.append(tab); card.addEventListener('click', () => { audioPlayer.currentTime = Math.max(0, measureStart + audioOffset); });
+    musicxmlScore.append(card); offset += measureSeconds(measure);
+  }
+  musicxmlScore.hidden = false; musicxmlPartLabel.hidden = importedMusicXml.parts.length < 2;
+  musicxmlStatus.textContent = `${part.name} · ${part.measures.length} measures · ${importedMusicXml.tempo || 'No'} BPM${importedMusicXml.time_signature ? ` · ${importedMusicXml.time_signature}` : ''}. Click a measure to seek there. Fret positions appear when supplied by the score.`;
+  updateMusicXmlPlayhead();
+}
+function updateMusicXmlPlayhead() {
+  if (musicxmlScore.hidden) return;
+  const time = (audioPlayer.currentTime || 0) - (Number(musicxmlOffsetInput.value) || 0);
+  for (const card of musicxmlScore.querySelectorAll('.musicxml-measure')) {
+    const start = Number(card.dataset.start);
+    const next = card.nextElementSibling;
+    const end = next ? Number(next.dataset.start) : Infinity;
+    card.classList.toggle('active', time >= start && time < end);
+  }
+}
+async function loadMusicXml() {
+  if (!currentJobId) return;
+  importedMusicXml = null; musicxmlScore.replaceChildren(); musicxmlScore.hidden = true; musicxmlPartLabel.hidden = true;
+  try {
+    const response = await fetch(`/api/library/${currentJobId}/musicxml`);
+    if (response.status === 404) { musicxmlStatus.textContent = 'No score imported for this song yet.'; return; }
+    const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Could not load score.');
+    importedMusicXml = data; musicXmlDefaultTempo = Number(data.tempo || currentTrackBpm || 120); const timing = readMusicXmlTiming(); musicxmlTempoInput.value = String(timing.tempo); musicxmlOffsetInput.value = String(timing.offset); musicxmlPartSelect.replaceChildren();
+    data.parts.forEach((part, index) => { const option = document.createElement('option'); option.value=String(index); option.textContent=part.name; musicxmlPartSelect.append(option); });
+    renderMusicXmlPart();
+  } catch (error) { musicxmlStatus.textContent = `Could not load MusicXML: ${error.message}`; }
+}
+importMusicxmlButton.addEventListener('click', async () => {
+  if (!currentJobId) { musicxmlStatus.textContent = 'Open a song from your library first.'; return; }
+  if (!musicxmlFile.files.length) { musicxmlStatus.textContent = 'Choose a .musicxml or .xml file first.'; return; }
+  const form = new FormData(); form.append('file', musicxmlFile.files[0]); importMusicxmlButton.disabled = true; musicxmlStatus.textContent = 'Importing score…';
+  try { const response = await fetch(`/api/library/${currentJobId}/musicxml`, {method:'POST', body:form}); const data = await response.json(); if (!response.ok) throw new Error(data.detail || 'Import failed.'); importedMusicXml=data; musicXmlDefaultTempo=Number(data.tempo || currentTrackBpm || 120); const timing=readMusicXmlTiming(); musicxmlTempoInput.value=String(timing.tempo); musicxmlOffsetInput.value=String(timing.offset); musicxmlPartSelect.replaceChildren(); data.parts.forEach((part,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent=part.name;musicxmlPartSelect.append(option);}); renderMusicXmlPart(); musicxmlFile.value=''; }
+  catch(error) { musicxmlStatus.textContent = `Could not import score: ${error.message}`; } finally { importMusicxmlButton.disabled=false; }
+});
+musicxmlPartSelect.addEventListener('change', renderMusicXmlPart);
+musicxmlTempoInput.addEventListener('change', saveMusicXmlTiming);
+musicxmlOffsetInput.addEventListener('change', saveMusicXmlTiming);
+musicxmlResetTiming.addEventListener('click', () => { musicxmlTempoInput.value = String(musicXmlDefaultTempo); musicxmlOffsetInput.value = '0'; saveMusicXmlTiming(); });
+audioPlayer.addEventListener('timeupdate', updateMusicXmlPlayhead);
+
 
 function formatNoteTime(seconds) { return formatTime(seconds); }
 function renderNoteEvents() {
   if (!currentPitchAnalysis?.events?.length) {
+    guitarTabView.hidden = true; guitarTabView.replaceChildren();
     noteEventsContainer.replaceChildren();
     const empty = document.createElement('span'); empty.className = 'note-events-empty';
     empty.textContent = 'No notes detected. Try another stem or a different section of the song.';
@@ -114,16 +219,54 @@ function renderNoteEvents() {
   if (index < 0) index = Math.max(0, events.length - 1);
   const start = Math.max(0, index - 3);
   const visible = events.slice(start, start + 10);
+  const activeEvent = activeNoteEventIndex >= 0 ? events[activeNoteEventIndex] : null;
+  const activeOnset = activeEvent ? Math.round(Number(activeEvent.start) * 100) : null;
   noteEventsContainer.replaceChildren();
+  if (noteStemSelect.value === 'guitar' || noteStemSelect.value === 'bass') {
+    guitarTabView.hidden = false; guitarTabView.replaceChildren();
+    const isBass = noteStemSelect.value === 'bass';
+    const tuning = isBass ? [{n:1,label:'G'}, {n:2,label:'D'}, {n:3,label:'A'}, {n:4,label:'E'}] : [{n:1,label:'e'}, {n:2,label:'B'}, {n:3,label:'G'}, {n:4,label:'D'}, {n:5,label:'A'}, {n:6,label:'E'}];
+    const heading = document.createElement('div'); heading.className = 'guitar-tab-heading'; heading.textContent = isBass ? 'Bass tab · Standard 4-string tuning (G–D–A–E)' : 'Guitar tab · Standard tuning (E–B–G–D–A–E)'; guitarTabView.append(heading);
+    // Notes with the same onset share one tab column, so chord tones line up vertically.
+    const columns = [];
+    visible.forEach((event, offset) => {
+      const onset = Math.round(Number(event.start) * 100);
+      let column = columns.find(item => item.onset === onset);
+      if (!column) { column = {onset, events: [], offsets: []}; columns.push(column); }
+      column.events.push(event); column.offsets.push(start + offset);
+    });
+    tuning.forEach(stringInfo => {
+      const row = document.createElement('div'); row.className = 'guitar-tab-string';
+      const label = document.createElement('span'); label.className = 'guitar-tab-label'; label.textContent = stringInfo.label; row.append(label);
+      columns.forEach(column => {
+        const cell = document.createElement('span'); cell.className = 'guitar-tab-cell';
+        if (activeOnset !== null && column.onset === activeOnset) cell.classList.add('active-chord');
+        if (column.offsets.includes(selectedNoteEventIndex)) cell.classList.add('selected');
+        const positions = column.events.map(event => ({event, position:getInstrumentPosition(event.midi, event.string, event.fret)})).filter(item => item.position?.string === stringInfo.n);
+        if (positions.length) {
+          const fret = document.createElement('span'); fret.className = 'guitar-tab-fret';
+          fret.textContent = positions.map(item => item.position.fret).join('/');
+          if (activeOnset !== null && column.onset === activeOnset) fret.classList.add('active-fret');
+          cell.append(fret);
+        } else { cell.textContent = '─'; }
+        if (positions.length) cell.title = positions.map(item => `${item.event.note} · ${formatNoteTime(item.event.start)}`).join(', ');
+        row.append(cell);
+      });
+      guitarTabView.append(row);
+    });
+  } else { guitarTabView.hidden = true; guitarTabView.replaceChildren(); }
   visible.forEach((event, offset) => {
     const eventIndex = start + offset;
     const button = document.createElement('button'); button.type = 'button'; button.className = 'note-event';
-    if (eventIndex === activeNoteEventIndex) button.classList.add('active');
+    if (activeOnset !== null && Math.round(Number(event.start) * 100) === activeOnset) button.classList.add('active');
     if (eventIndex === selectedNoteEventIndex) button.classList.add('selected');
     const note = document.createElement('strong'); note.textContent = event.note;
+    const tabPosition = document.createElement('span'); tabPosition.className = 'note-event-tab';
+    const tab = getInstrumentPosition(event.midi, event.string, event.fret);
+    tabPosition.textContent = tab ? `${tab.string}|${tab.fret}` : 'Tab —';
     const frequency = document.createElement('span'); frequency.className = 'note-event-frequency'; frequency.textContent = event.frequency_hz != null ? `${event.frequency_hz.toFixed(1)} Hz` : '';
     const timestamp = document.createElement('span'); timestamp.textContent = formatNoteTime(event.start);
-    button.append(note, frequency, timestamp);
+    button.append(note, tabPosition, frequency, timestamp);
     button.addEventListener('click', () => { selectedNoteEventIndex = eventIndex; audioPlayer.currentTime = event.start; fillNoteEditor(); updateCurrentNote(true); });
     noteEventsContainer.append(button);
   });
@@ -145,11 +288,15 @@ function fillNoteEditor() {
   const event = currentPitchAnalysis?.events?.[selectedNoteEventIndex];
   const enabled = Boolean(event);
   editNotePitch.disabled = !enabled; editNoteStart.disabled = !enabled; editNoteEnd.disabled = !enabled;
+  editNoteString.disabled = !enabled; editNoteFret.disabled = !enabled;
   applyNoteEditButton.disabled = !enabled; deleteNoteEventButton.disabled = !enabled;
   if (!event) return;
   editNotePitch.value = event.note || midiToNote(event.midi);
   editNoteStart.value = Number(event.start).toFixed(2);
   editNoteEnd.value = Number(event.end).toFixed(2);
+  const tab = getInstrumentPosition(event.midi, event.string, event.fret);
+  editNoteString.value = tab ? String(tab.string) : '';
+  editNoteFret.value = tab ? String(tab.fret) : '';
 }
 function markArrangementDraft(message = 'Unsaved changes. Save the arrangement to keep them with this track.') {
   arrangementDirty = true;
@@ -157,6 +304,34 @@ function markArrangementDraft(message = 'Unsaved changes. Save the arrangement t
   saveNoteArrangementButton.textContent = 'Save arrangement *';
 }
 function noteFrequency(midi) { return 440 * (2 ** ((midi - 69) / 12)); }
+// Standard guitar tuning, MIDI pitches for strings 1 (high E) through 6 (low E).
+const GUITAR_OPEN_MIDI = {1:64, 2:59, 3:55, 4:50, 5:45, 6:40};
+function getGuitarPosition(midi, stringValue = null, fretValue = null) {
+  const string = Number(stringValue), fret = Number(fretValue);
+  if (Number.isInteger(string) && GUITAR_OPEN_MIDI[string] != null && Number.isInteger(fret) && fret >= 0 && fret <= 24 && GUITAR_OPEN_MIDI[string] + fret === Number(midi)) return {string, fret};
+  const candidates = Object.entries(GUITAR_OPEN_MIDI).map(([s, open]) => ({string:Number(s), fret:Number(midi)-open})).filter(p => p.fret >= 0 && p.fret <= 24);
+  candidates.sort((a,b) => a.fret-b.fret || a.string-b.string);
+  return candidates[0] || null;
+}
+// Standard four-string bass tuning, string 1 (high G) through string 4 (low E).
+const BASS_OPEN_MIDI = {1: 43, 2: 38, 3: 33, 4: 28};
+function getInstrumentPosition(midi, stringValue = null, fretValue = null) {
+  const openMidi = noteStemSelect.value === 'bass' ? BASS_OPEN_MIDI : GUITAR_OPEN_MIDI;
+  const string = Number(stringValue), fret = Number(fretValue);
+  if (Number.isInteger(string) && openMidi[string] != null && Number.isInteger(fret) && fret >= 0 && fret <= 24 && openMidi[string] + fret === Number(midi)) return {string, fret};
+  const candidates = Object.entries(openMidi).map(([s, open]) => ({string:Number(s), fret:Number(midi)-open})).filter(p => p.fret >= 0 && p.fret <= 24);
+  candidates.sort((a,b) => a.fret-b.fret || a.string-b.string);
+  return candidates[0] || null;
+}
+editNoteString.addEventListener('change', () => {
+  const midi = parseNotePitch(editNotePitch.value);
+  const string = Number(editNoteString.value);
+  const openMidi = noteStemSelect.value === 'bass' ? BASS_OPEN_MIDI : GUITAR_OPEN_MIDI;
+  if (midi !== null && openMidi[string] != null) {
+    const fret = midi - openMidi[string];
+    editNoteFret.value = fret >= 0 && fret <= 24 ? String(fret) : '';
+  } else if (!editNoteString.value) editNoteFret.value = '';
+});
 applyNoteEditButton.addEventListener('click', () => {
   const event = currentPitchAnalysis?.events?.[selectedNoteEventIndex];
   if (!event) return;
@@ -166,7 +341,12 @@ applyNoteEditButton.addEventListener('click', () => {
   if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end > Number(currentPitchAnalysis.duration || audioPlayer.duration || Infinity)) {
     noteEditorStatus.textContent = 'Check the timing: start must be before end and both must be within the song.'; return;
   }
-  Object.assign(event, {midi, note: midiToNote(midi), start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, edited: true});
+  const selectedString = editNoteString.value ? Number(editNoteString.value) : null;
+  const selectedFret = editNoteFret.value !== '' ? Number(editNoteFret.value) : null;
+  if ((selectedString == null) !== (selectedFret == null) || (selectedString != null && (!Number.isInteger(selectedString) || !Number.isInteger(selectedFret) || selectedFret < 0 || selectedFret > 24 || (noteStemSelect.value === 'bass' ? BASS_OPEN_MIDI[selectedString] : GUITAR_OPEN_MIDI[selectedString]) + selectedFret !== midi))) {
+    noteEditorStatus.textContent = 'Choose a string and fret that match the note pitch, or leave both unassigned.'; return;
+  }
+  Object.assign(event, {midi, note: midiToNote(midi), start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, string: selectedString, fret: selectedFret, edited: true});
   currentPitchAnalysis.events.sort((a, b) => a.start - b.start);
   selectedNoteEventIndex = currentPitchAnalysis.events.indexOf(event);
   markArrangementDraft('Note updated. Save the arrangement to keep this change.');
@@ -179,12 +359,29 @@ addNoteEventButton.addEventListener('click', () => {
   const end = Math.min(duration, start + 0.2);
   if (end <= start) { noteEditorStatus.textContent = 'Move playback away from the end of the song to add a note.'; return; }
   const midi = parseNotePitch(editNotePitch.value) ?? 36;
-  const event = {start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, midi, note: midiToNote(midi), frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, confidence: 1, edited: true};
+  const position = getInstrumentPosition(midi);
+  const event = {start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, midi, note: midiToNote(midi), frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, confidence: 1, string: position?.string ?? null, fret: position?.fret ?? null, edited: true};
   currentPitchAnalysis.events.push(event); currentPitchAnalysis.events.sort((a, b) => a.start - b.start);
   selectedNoteEventIndex = currentPitchAnalysis.events.indexOf(event);
   markArrangementDraft('Note added. Adjust its pitch and timing, then save the arrangement.');
   fillNoteEditor(); updateCurrentNote(true);
 });
+document.querySelector('#add-chord-tone').addEventListener('click', () => {
+  if (!currentPitchAnalysis) { noteEditorStatus.textContent = 'Wait for note analysis to finish first.'; return; }
+  const selected = currentPitchAnalysis.events[selectedNoteEventIndex];
+  const start = selected ? Number(selected.start) : Math.max(0, Number(audioPlayer.currentTime) || 0);
+  const duration = Number(currentPitchAnalysis.duration || audioPlayer.duration || start + 0.2);
+  const end = Math.min(duration, selected ? Number(selected.end) : start + 0.2);
+  if (end <= start) { noteEditorStatus.textContent = 'Move playback away from the end of the song to add a chord tone.'; return; }
+  const midi = selected ? Math.min(96, Number(selected.midi) + 4) : (parseNotePitch(editNotePitch.value) ?? 48);
+  const position = getInstrumentPosition(midi);
+  const event = {start:Math.round(start*1000)/1000, end:Math.round(end*1000)/1000, midi, note:midiToNote(midi), frequency_hz:Math.round(noteFrequency(midi)*100)/100, confidence:1, string:position?.string ?? null, fret:position?.fret ?? null, edited:true, chord_tone:true};
+  currentPitchAnalysis.events.push(event); currentPitchAnalysis.events.sort((a,b)=>a.start-b.start);
+  selectedNoteEventIndex=currentPitchAnalysis.events.indexOf(event);
+  markArrangementDraft('Chord tone added at the selected note’s timing. Set its pitch/string/fret, then save.');
+  fillNoteEditor(); updateCurrentNote(true);
+});
+
 deleteNoteEventButton.addEventListener('click', () => {
   if (!currentPitchAnalysis?.events?.[selectedNoteEventIndex]) return;
   currentPitchAnalysis.events.splice(selectedNoteEventIndex, 1);
@@ -1039,6 +1236,7 @@ function loadCompletedTrack(job, fromLibrary = false) {
   mixerModelLabel.textContent = job.model === 'htdemucs_6s' ? '6 stems · vocals, drums, bass, guitar, piano, other' : '4 stems · vocals, drums, bass, other';
   renderStems(currentStems);
   loadPitchAnalysis(noteStemSelect.value);
+  loadMusicXml();
   restoreTrackSettings(job.id);
   jobMessage.textContent = `${job.title || (job.filename || 'Track').replace(/\.[^.]+$/, '')}${job.artist ? ' · ' + job.artist : ''}${fromLibrary ? ' · Loaded from your library' : ' · Saved to your library'}`;
   setProgress('completed');

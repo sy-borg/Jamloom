@@ -7,6 +7,7 @@ import threading
 import uuid
 import json
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,7 +35,7 @@ MODELS = {
     "htdemucs_6s": {"vocals", "drums", "bass", "guitar", "piano", "other"},
 }
 
-app = FastAPI(title="Jamloom", version="0.4.7")
+app = FastAPI(title="Jamloom", version="0.4.11")
 app.include_router(sessions_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -586,11 +587,24 @@ async def save_note_arrangement(job_id: str, stem_name: str, payload: dict[str, 
         end = round(min(duration, end), 3)
         if end <= start:
             raise HTTPException(400, f"Note {index + 1} is too short.")
+        string_value = event.get("string")
+        fret_value = event.get("fret")
+        if string_value in (None, "") and fret_value in (None, ""):
+            string_value = fret_value = None
+        else:
+            try:
+                string_value, fret_value = int(string_value), int(fret_value)
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"Note {index + 1} has an invalid guitar tab position.")
+            open_midi = {1: 64, 2: 59, 3: 55, 4: 50, 5: 45, 6: 40}
+            if string_value not in open_midi or not 0 <= fret_value <= 24 or open_midi[string_value] + fret_value != midi:
+                raise HTTPException(400, f"Note {index + 1} has a string/fret position that does not match its pitch.")
         normalized.append({
             "start": start, "end": end, "midi": midi,
             "note": f"{note_names[midi % 12]}{midi // 12 - 1}",
             "frequency_hz": round(440.0 * (2.0 ** ((midi - 69) / 12.0)), 2),
             "confidence": float(event.get("confidence", 1.0)) if str(event.get("confidence", 1.0)).replace('.', '', 1).isdigit() else 1.0,
+            "string": string_value, "fret": fret_value,
             "edited": True,
         })
     normalized.sort(key=lambda event: (event["start"], event["end"]))
@@ -614,6 +628,103 @@ def directory_size_bytes(directory: Path) -> int:
     except OSError:
         return total
     return total
+
+
+
+
+def parse_musicxml(data: bytes) -> dict[str, Any]:
+    """Parse a bounded MusicXML score into a lightweight, browser-friendly representation."""
+    if len(data) > 20 * 1024 * 1024:
+        raise HTTPException(413, "MusicXML files must be 20 MB or smaller.")
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        raise HTTPException(400, "This does not appear to be valid MusicXML.")
+    if root.tag not in {"score-partwise", "score-timewise"}:
+        raise HTTPException(400, "Please import a partwise or timewise MusicXML score.")
+    if root.tag == "score-timewise":
+        raise HTTPException(400, "Timewise MusicXML is not supported yet. Export as partwise MusicXML from your notation app.")
+    def child_text(node, tag, default=""):
+        child = node.find(tag)
+        return child.text.strip() if child is not None and child.text else default
+    part_names = {}
+    for part in root.findall('./part-list/score-part'):
+        part_names[part.get('id', '')] = child_text(part, 'part-name', 'Part')
+    parts = []
+    for part in root.findall('part'):
+        measures = []
+        divisions, tempo, beats, beat_type = 1, 120.0, 4, 4
+        for measure_index, measure in enumerate(part.findall('measure')):
+            attrs = measure.find('attributes')
+            if attrs is not None:
+                divisions = int(child_text(attrs, 'divisions', str(divisions)) or divisions)
+                ts = attrs.find('time')
+                if ts is not None:
+                    beats = int(child_text(ts, 'beats', str(beats)) or beats)
+                    beat_type = int(child_text(ts, 'beat-type', str(beat_type)) or beat_type)
+            for direction in measure.findall('direction'):
+                sound = direction.find('sound')
+                if sound is not None and sound.get('tempo'):
+                    try: tempo = float(sound.get('tempo'))
+                    except ValueError: pass
+                metronome = direction.find('./direction-type/metronome')
+                if metronome is not None:
+                    try: tempo = float(child_text(metronome, 'per-minute', str(tempo)))
+                    except ValueError: pass
+            cursor = 0.0
+            notes = []
+            for note in measure.findall('note'):
+                duration = float(child_text(note, 'duration', '0') or 0) / max(divisions, 1)
+                if note.find('chord') is None:
+                    start = cursor
+                    if note.find('grace') is None: cursor += duration
+                else:
+                    start = max(0.0, cursor - duration)
+                if note.find('rest') is not None:
+                    continue
+                pitch = note.find('pitch')
+                step = child_text(pitch, 'step') if pitch is not None else ''
+                alter = int(child_text(pitch, 'alter', '0') or 0) if pitch is not None else 0
+                octave = child_text(pitch, 'octave') if pitch is not None else ''
+                accidental = { -2:'bb', -1:'b', 1:'#', 2:'##' }.get(alter, '')
+                tech = note.find('./notations/technical')
+                string_no = int(child_text(tech, 'string', '0') or 0) if tech is not None else 0
+                fret_text = child_text(tech, 'fret', '') if tech is not None else ''
+                notes.append({'beat': round(start, 4), 'duration': round(duration, 4), 'pitch': f'{step}{accidental}{octave}' if step else '', 'string': string_no or None, 'fret': int(fret_text) if fret_text.isdigit() else None, 'rest': False})
+            measures.append({'number': measure.get('number', str(measure_index + 1)), 'beats': beats * 4 / max(beat_type, 1), 'notes': notes})
+        parts.append({'id': part.get('id', ''), 'name': part_names.get(part.get('id', ''), 'Part'), 'measures': measures})
+    if not parts:
+        raise HTTPException(400, "No score parts were found in this MusicXML file.")
+    return {'title': child_text(root, 'movement-title', ''), 'tempo': tempo, 'time_signature': f'{beats}/{beat_type}', 'parts': parts}
+
+
+@app.post('/api/library/{track_id}/musicxml')
+async def import_musicxml(track_id: str, file: UploadFile = File(...)):
+    if not track_id or any(ch not in '0123456789abcdef' for ch in track_id.lower()):
+        raise HTTPException(400, 'Invalid library track ID.')
+    path = LIBRARY_DIR / track_id
+    with jobs_lock:
+        job = jobs.get(track_id)
+        if not job or job.get('status') != 'completed' or not path.is_dir():
+            raise HTTPException(404, 'Library track not found.')
+    if Path(file.filename or '').suffix.lower() not in {'.musicxml', '.xml', '.mxl'}:
+        raise HTTPException(400, 'Choose a .musicxml or .xml file. Compressed .mxl files are not supported yet; export uncompressed MusicXML.')
+    data = await file.read(20 * 1024 * 1024 + 1)
+    score = parse_musicxml(data)
+    score['source_filename'] = Path(file.filename or 'score.musicxml').name[:200]
+    (path / 'musicxml.json').write_text(json.dumps(score, ensure_ascii=False, indent=2), encoding='utf-8')
+    return score
+
+
+@app.get('/api/library/{track_id}/musicxml')
+async def get_musicxml(track_id: str):
+    if not track_id or any(ch not in '0123456789abcdef' for ch in track_id.lower()):
+        raise HTTPException(400, 'Invalid library track ID.')
+    score_path = LIBRARY_DIR / track_id / 'musicxml.json'
+    if not score_path.is_file():
+        raise HTTPException(404, 'No MusicXML score has been imported for this track.')
+    try: return json.loads(score_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError): raise HTTPException(500, 'Could not read the saved MusicXML score.')
 
 
 @app.get("/api/library")
