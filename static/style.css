@@ -107,7 +107,7 @@ kbd{display:inline-block;padding:2px 5px;border:1px solid #3a4c5b;border-radius:
 .session-panel{display:none!important}
 
 /* Experimental pitch-analysis panel (0.4.0). */
-.note-analysis-controls{display:flex;align-items:end;gap:10px;padding:12px 14px 4px}.note-analysis-controls label{display:flex;flex:1;flex-direction:column;gap:5px;color:var(--muted);font-size:11px}.note-analysis-controls select{width:100%;min-height:40px}.note-analysis-controls button{min-height:40px;white-space:nowrap}.note-analysis-status{margin:8px 14px;color:var(--muted);font-size:11px;line-height:1.5}.note-current{display:flex;align-items:center;gap:14px;padding:12px 15px 14px;min-height:76px}.note-current .note-placeholder{display:grid;place-items:center;min-width:72px;min-height:62px;padding:4px 8px;border:1px solid #31515d;border-radius:12px;background:#10232c;color:var(--cyan);font-size:30px}.note-current>div{display:flex;flex-direction:column;gap:5px}.note-current strong{font-size:13px}.note-current>div span{font-size:11px;color:var(--muted)}.note-events{display:flex;gap:7px;overflow-x:auto;padding:7px 14px 12px;scrollbar-width:thin}.note-event{flex:0 0 auto;min-width:56px;padding:8px 9px;border:1px solid #29414c;border-radius:9px;background:#101e27;color:var(--text);cursor:pointer;text-align:center}.note-event strong,.note-event span{display:block}.note-event .note-event-tab{margin-top:4px;color:var(--cyan);font-size:11px;font-weight:700}.note-event strong{font-size:14px}.note-event span{margin-top:4px;color:var(--muted);font-size:10px}.note-event.active{position:relative;border-color:#53f0ff;background:linear-gradient(180deg,#17616b,#10333d);box-shadow:0 0 0 1px rgba(83,240,255,.45),0 0 14px rgba(0,220,255,.3);color:#fff}.note-event.active strong{color:#8ff7ff}.note-event.active::after{content:'';position:absolute;left:20%;right:20%;bottom:3px;height:2px;border-radius:2px;background:#53f0ff;box-shadow:0 0 8px #53f0ff}.note-events-empty{font-size:11px;color:var(--muted)}.note-analysis-disclaimer{margin:0;padding:0 14px 13px;color:var(--muted);font-size:10px;line-height:1.5}@media(max-width:420px){.note-analysis-controls{align-items:stretch;flex-wrap:wrap}.note-analysis-controls label{min-width:100%}.note-analysis-controls button{width:100%}.note-current .note-placeholder{min-width:64px}}
+.note-analysis-controls{display:flex;align-items:end;gap:10px;padding:12px 14px 4px}.note-analysis-controls label{display:flex;flex:1;flex-direction:column;gap:5px;color:var(--muted);font-size:11px}.note-analysis-controls select{width:100%;min-height:40px}.note-analysis-controls button{min-height:40px;white-space:nowrap}.note-analysis-status{margin:8px 14px;color:var(--muted);font-size:11px;line-height:1.5}.note-current{display:flex;align-items:center;gap:14px;padding:12px 15px 14px;min-height:76px}.note-current .note-placeholder{display:grid;place-items:center;min-width:72px;min-height:62px;padding:4px 8px;border:1px solid #31515d;border-radius:12px;background:#10232c;color:var(--cyan);font-size:30px}.note-current>div{display:flex;flex-direction:column;gap:5px}.note-current strong{font-size:13px}.note-current>div span{font-size:11px;color:var(--muted)}.note-events{display:flex;gap:7px;overflow-x:auto;padding:7px 14px 12px;scrollbar-width:thin}.note-event{flex:0 0 auto;min-width:56px;padding:8px 9px;border:1px solid #29414c;border-radius:9px;background:#101e27;color:var(--text);cursor:pointer;text-align:center}.note-event strong,.note-event span:not(.note-event-line){display:block}.note-event .note-event-tab{margin-top:4px;color:var(--cyan);font-size:11px;font-weight:700}.note-event strong{font-size:14px}.note-event span{margin-top:4px;color:var(--muted);font-size:10px}.note-event.active{position:relative;border-color:#53f0ff;background:linear-gradient(180deg,#17616b,#10333d);box-shadow:0 0 0 1px rgba(83,240,255,.45),0 0 14px rgba(0,220,255,.3);color:#fff}.note-event.active strong{color:#8ff7ff}.note-event.active::after{content:'';position:absolute;left:20%;right:20%;bottom:3px;height:2px;border-radius:2px;background:#53f0ff;box-shadow:0 0 8px #53f0ff}.note-events-empty{font-size:11px;color:var(--muted)}.note-analysis-disclaimer{margin:0;padding:0 14px 13px;color:var(--muted);font-size:10px;line-height:1.5}@media(max-width:420px){.note-analysis-controls{align-items:stretch;flex-wrap:wrap}.note-analysis-controls label{min-width:100%}.note-analysis-controls button{width:100%}.note-current .note-placeholder{min-width:64px}}
 
 
 /* Jamloom 0.4.1 — editable note arrangements (0.4.2 spacing fix) */
@@ -150,3 +150,41 @@ kbd{display:inline-block;padding:2px 5px;border:1px solid #3a4c5b;border-radius:
 
 /* Audio-aligned six-string tablature; columns correspond to detected note events. */
 .guitar-tab-view{margin:4px 14px 8px;padding:9px 8px;border:1px solid #29414c;border-radius:9px;background:#0b151d;overflow-x:auto}.guitar-tab-string{display:grid;grid-template-columns:18px repeat(10,minmax(28px,1fr));min-width:310px;min-height:25px;align-items:center}.guitar-tab-label{color:var(--muted);font-size:11px;font-weight:700;text-align:center}.guitar-tab-cell{position:relative;text-align:center;color:#91a9b5;font:11px ui-monospace,monospace;line-height:22px}.guitar-tab-cell:not(:first-child){background:linear-gradient(transparent 47%,#38505b 47%,#38505b 53%,transparent 53%)}.guitar-tab-cell.active-chord{z-index:1;color:#fff;font-weight:900;background-color:rgba(0,220,255,.18);box-shadow:inset 0 1px 0 rgba(72,244,255,.85),inset 0 -1px 0 rgba(72,244,255,.85)}.guitar-tab-cell.active-chord:first-of-type{box-shadow:inset 0 1px 0 rgba(72,244,255,.85),inset 0 -1px 0 rgba(72,244,255,.85)}.guitar-tab-fret{display:inline-block;min-width:15px;padding:0 3px;border-radius:4px}.guitar-tab-fret.active-fret{color:#07151b;background:#53f0ff;text-shadow:none;box-shadow:0 0 8px rgba(0,220,255,.75)}.guitar-tab-cell.selected{color:#fff;background-color:#21434b}
+
+/* Jamloom 0.4.16 — match fretboard chord highlight width to note buttons. */
+.note-editor[hidden]{display:none!important}
+.note-timeline-scroll{--note-column-width:112px;max-width:100%;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin;scrollbar-color:#315c69 #0b151d;padding-bottom:3px}
+.note-timeline-inner{width:max-content;min-width:100%}
+.guitar-tab-view{width:max-content;min-width:0;margin:4px 14px 8px;padding:9px 8px;border:1px solid #29414c;border-radius:9px;background:#0b151d;overflow:visible}
+.guitar-tab-heading{margin-bottom:7px;color:var(--muted);font-size:10px}
+.guitar-tab-string{display:grid;width:max-content;min-width:0;min-height:25px;align-items:center}
+.guitar-tab-cell{width:calc(var(--note-column-width,72px) - 4px);margin:0 2px;box-sizing:border-box}
+.note-events{display:flex;align-items:stretch;gap:0;width:max-content;min-width:0;margin:0 14px;padding:7px 8px 12px;overflow:visible;scrollbar-width:none}
+.note-events::before{content:'';display:block;flex:0 0 18px;width:18px}
+.note-event-column{display:flex;flex:0 0 var(--note-column-width,72px);width:var(--note-column-width,72px);box-sizing:border-box;flex-direction:column;align-items:stretch;gap:4px;padding:0 2px}
+.note-event-column .note-event{width:100%;min-width:0;min-height:72px;box-sizing:border-box;padding:7px 3px;font-size:10px;white-space:nowrap;overflow-wrap:normal}
+.note-event-column .note-event strong{font-size:12px;white-space:nowrap}
+.note-event-column .note-event span{font-size:9px;white-space:nowrap}
+.note-events-empty{padding:4px 0}
+@media(max-width:480px){.guitar-tab-view{margin-left:10px;margin-right:10px}.note-events{margin-left:10px;margin-right:10px}.note-timeline-scroll{--note-column-width:96px}.guitar-tab-cell{width:var(--note-column-width,64px)}.note-event-column{flex-basis:var(--note-column-width,64px);width:var(--note-column-width,64px)}}
+
+/* Jamloom 0.4.17 — keep note-button labels on one line and widen aligned columns. */
+
+
+/* Jamloom 0.4.18 — two compact, readable lines per note button. */
+.note-event-column .note-event{display:flex;flex-direction:column;justify-content:center;align-items:stretch;gap:7px;white-space:normal;overflow:hidden}
+.note-event-line{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;white-space:nowrap;line-height:1.25}
+.note-event-line-primary strong{font-size:12px;flex:0 0 auto}
+.note-event-line-primary .note-event-tab{margin:0;font-size:10px;flex:0 0 auto}
+.note-event-line-details{font-size:9px;color:var(--muted)}
+.note-event-line-details .note-event-frequency,.note-event-line-details .note-event-time{margin:0;font-size:9px;white-space:nowrap}
+.note-event.active .note-event-line-details{color:#d1fbff}
+
+/* Jamloom 0.4.19 — keep note labels inline within their compact two-line rows. */
+.note-event-line strong,.note-event-line span{display:inline}
+
+
+/* Jamloom 0.4.20 — preserve flex layout for two-line note labels. */
+.note-event-line{display:flex}
+
+.note-edit-groups{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}.note-edit-group{min-width:0;padding:9px;border:1px solid #223541;border-radius:9px}.note-edit-group-label{display:block;margin-bottom:2px;color:var(--muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.note-edit-group .note-editor-actions{margin-top:5px}.note-edit-group .note-editor-actions button{min-width:0}@media(max-width:620px){.note-edit-groups{grid-template-columns:1fr}}

@@ -101,6 +101,8 @@ const currentNoteLabel = document.querySelector('#current-note-label');
 const currentNoteTime = document.querySelector('#current-note-time');
 const noteEventsContainer = document.querySelector('#note-events');
 const guitarTabView = document.querySelector('#guitar-tab-view');
+const noteEditor = document.querySelector('.note-editor');
+function setNoteEditorVisible(visible) { noteEditor.hidden = !visible; }
 const editNotePitch = document.querySelector('#edit-note-pitch');
 const editNoteStart = document.querySelector('#edit-note-start');
 const editNoteEnd = document.querySelector('#edit-note-end');
@@ -217,58 +219,75 @@ function renderNoteEvents() {
   let index = events.findIndex(event => event.start <= time && event.end > time);
   if (index < 0) index = events.findIndex(event => event.start > time);
   if (index < 0) index = Math.max(0, events.length - 1);
-  const start = Math.max(0, index - 3);
-  const visible = events.slice(start, start + 10);
+  // Build shared onset columns once so the tab/fretboard and note buttons use identical widths.
+  const allColumns = [];
+  events.forEach((event, eventIndex) => {
+    const onset = Math.round(Number(event.start) * 100);
+    let column = allColumns.find(item => item.onset === onset);
+    if (!column) { column = {onset, events: []}; allColumns.push(column); }
+    column.events.push({event, eventIndex});
+  });
+  let activeColumnIndex = allColumns.findIndex(column => column.events.some(item => item.eventIndex === activeNoteEventIndex));
+  if (activeColumnIndex < 0) activeColumnIndex = allColumns.findIndex(column => column.events.some(item => item.eventIndex === index));
+  if (activeColumnIndex < 0) activeColumnIndex = allColumns.findIndex(column => column.onset > Math.round(time * 100));
+  if (activeColumnIndex < 0) activeColumnIndex = Math.max(0, allColumns.length - 1);
+  const visibleStart = Math.max(0, activeColumnIndex - 3);
+  const columns = allColumns.slice(visibleStart, visibleStart + 10);
   const activeEvent = activeNoteEventIndex >= 0 ? events[activeNoteEventIndex] : null;
   const activeOnset = activeEvent ? Math.round(Number(activeEvent.start) * 100) : null;
+
   noteEventsContainer.replaceChildren();
   if (noteStemSelect.value === 'guitar' || noteStemSelect.value === 'bass') {
     guitarTabView.hidden = false; guitarTabView.replaceChildren();
     const isBass = noteStemSelect.value === 'bass';
     const tuning = isBass ? [{n:1,label:'G'}, {n:2,label:'D'}, {n:3,label:'A'}, {n:4,label:'E'}] : [{n:1,label:'e'}, {n:2,label:'B'}, {n:3,label:'G'}, {n:4,label:'D'}, {n:5,label:'A'}, {n:6,label:'E'}];
     const heading = document.createElement('div'); heading.className = 'guitar-tab-heading'; heading.textContent = isBass ? 'Bass tab · Standard 4-string tuning (G–D–A–E)' : 'Guitar tab · Standard tuning (E–B–G–D–A–E)'; guitarTabView.append(heading);
-    // Notes with the same onset share one tab column, so chord tones line up vertically.
-    const columns = [];
-    visible.forEach((event, offset) => {
-      const onset = Math.round(Number(event.start) * 100);
-      let column = columns.find(item => item.onset === onset);
-      if (!column) { column = {onset, events: [], offsets: []}; columns.push(column); }
-      column.events.push(event); column.offsets.push(start + offset);
-    });
     tuning.forEach(stringInfo => {
-      const row = document.createElement('div'); row.className = 'guitar-tab-string';
+      const row = document.createElement('div'); row.className = 'guitar-tab-string'; row.style.gridTemplateColumns = `18px repeat(${columns.length}, var(--note-column-width, 72px))`;
       const label = document.createElement('span'); label.className = 'guitar-tab-label'; label.textContent = stringInfo.label; row.append(label);
       columns.forEach(column => {
         const cell = document.createElement('span'); cell.className = 'guitar-tab-cell';
         if (activeOnset !== null && column.onset === activeOnset) cell.classList.add('active-chord');
-        if (column.offsets.includes(selectedNoteEventIndex)) cell.classList.add('selected');
-        const positions = column.events.map(event => ({event, position:getInstrumentPosition(event.midi, event.string, event.fret)})).filter(item => item.position?.string === stringInfo.n);
+        if (column.events.some(item => item.eventIndex === selectedNoteEventIndex)) cell.classList.add('selected');
+        const positions = column.events.map(item => ({...item, position:getInstrumentPosition(item.event.midi, item.event.string, item.event.fret)})).filter(item => item.position?.string === stringInfo.n);
         if (positions.length) {
           const fret = document.createElement('span'); fret.className = 'guitar-tab-fret';
           fret.textContent = positions.map(item => item.position.fret).join('/');
           if (activeOnset !== null && column.onset === activeOnset) fret.classList.add('active-fret');
           cell.append(fret);
+          cell.title = positions.map(item => `${item.event.note} · ${formatNoteTime(item.event.start)}`).join(', ');
         } else { cell.textContent = '─'; }
-        if (positions.length) cell.title = positions.map(item => `${item.event.note} · ${formatNoteTime(item.event.start)}`).join(', ');
         row.append(cell);
       });
       guitarTabView.append(row);
     });
   } else { guitarTabView.hidden = true; guitarTabView.replaceChildren(); }
-  visible.forEach((event, offset) => {
-    const eventIndex = start + offset;
-    const button = document.createElement('button'); button.type = 'button'; button.className = 'note-event';
-    if (activeOnset !== null && Math.round(Number(event.start) * 100) === activeOnset) button.classList.add('active');
-    if (eventIndex === selectedNoteEventIndex) button.classList.add('selected');
-    const note = document.createElement('strong'); note.textContent = event.note;
-    const tabPosition = document.createElement('span'); tabPosition.className = 'note-event-tab';
-    const tab = getInstrumentPosition(event.midi, event.string, event.fret);
-    tabPosition.textContent = tab ? `${tab.string}|${tab.fret}` : 'Tab —';
-    const frequency = document.createElement('span'); frequency.className = 'note-event-frequency'; frequency.textContent = event.frequency_hz != null ? `${event.frequency_hz.toFixed(1)} Hz` : '';
-    const timestamp = document.createElement('span'); timestamp.textContent = formatNoteTime(event.start);
-    button.append(note, tabPosition, frequency, timestamp);
-    button.addEventListener('click', () => { selectedNoteEventIndex = eventIndex; audioPlayer.currentTime = event.start; fillNoteEditor(); updateCurrentNote(true); });
-    noteEventsContainer.append(button);
+
+  columns.forEach(column => {
+    const columnEl = document.createElement('div'); columnEl.className = 'note-event-column';
+    column.events.forEach(({event, eventIndex}) => {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'note-event';
+      if (activeOnset !== null && column.onset === activeOnset) button.classList.add('active');
+      if (eventIndex === selectedNoteEventIndex) button.classList.add('selected');
+      const noteLine = document.createElement('span'); noteLine.className = 'note-event-line note-event-line-primary';
+      const note = document.createElement('strong'); note.textContent = event.note;
+      const tabPosition = document.createElement('span'); tabPosition.className = 'note-event-tab';
+      const tab = getInstrumentPosition(event.midi, event.string, event.fret);
+      tabPosition.textContent = tab ? `${tab.string}|${tab.fret}` : 'Tab —';
+      noteLine.append(note, tabPosition);
+      const detailLine = document.createElement('span'); detailLine.className = 'note-event-line note-event-line-details';
+      const frequency = document.createElement('span'); frequency.className = 'note-event-frequency'; frequency.textContent = event.frequency_hz != null ? `${event.frequency_hz.toFixed(1)} Hz` : '— Hz';
+      const timestamp = document.createElement('span'); timestamp.className = 'note-event-time'; timestamp.textContent = formatNoteTime(event.start);
+      detailLine.append(frequency, timestamp);
+      button.append(noteLine, detailLine);
+      button.addEventListener('click', () => {
+        selectedNoteEventIndex = eventIndex;
+        if (audioPlayer.paused) setNoteEditorVisible(true); else setNoteEditorVisible(false);
+        audioPlayer.currentTime = event.start; fillNoteEditor(); updateCurrentNote(true);
+      });
+      columnEl.append(button);
+    });
+    noteEventsContainer.append(columnEl);
   });
 }
 function midiToNote(midi) {
@@ -323,15 +342,21 @@ function getInstrumentPosition(midi, stringValue = null, fretValue = null) {
   candidates.sort((a,b) => a.fret-b.fret || a.string-b.string);
   return candidates[0] || null;
 }
-editNoteString.addEventListener('change', () => {
-  const midi = parseNotePitch(editNotePitch.value);
+function updatePitchFromFretboardPosition() {
   const string = Number(editNoteString.value);
+  const fret = Number(editNoteFret.value);
   const openMidi = noteStemSelect.value === 'bass' ? BASS_OPEN_MIDI : GUITAR_OPEN_MIDI;
-  if (midi !== null && openMidi[string] != null) {
-    const fret = midi - openMidi[string];
-    editNoteFret.value = fret >= 0 && fret <= 24 ? String(fret) : '';
-  } else if (!editNoteString.value) editNoteFret.value = '';
+  if (!editNoteString.value || editNoteFret.value === '' || openMidi[string] == null || !Number.isInteger(fret) || fret < 0 || fret > 24) return;
+  const midi = openMidi[string] + fret;
+  editNotePitch.value = midiToNote(midi);
+  noteEditorStatus.textContent = `String ${string}, fret ${fret} gives ${midiToNote(midi)} (${noteFrequency(midi).toFixed(1)} Hz). Apply tone edit, then save the arrangement.`;
+}
+editNoteString.addEventListener('change', () => {
+  // A chosen string/fret is the source of truth. If a fret is already entered,
+  // changing strings immediately recalculates the pitch.
+  updatePitchFromFretboardPosition();
 });
+editNoteFret.addEventListener('change', updatePitchFromFretboardPosition);
 applyNoteEditButton.addEventListener('click', () => {
   const event = currentPitchAnalysis?.events?.[selectedNoteEventIndex];
   if (!event) return;
@@ -401,6 +426,7 @@ saveNoteArrangementButton.addEventListener('click', async () => {
     currentPitchAnalysis.events = result.events; currentPitchAnalysis.arrangement_events = result.events;
     arrangementDirty = false; saveNoteArrangementButton.textContent = 'Save arrangement';
     noteEditorStatus.textContent = result.message || 'Arrangement saved with this track.';
+    setNoteEditorVisible(false);
     selectedNoteEventIndex = Math.min(selectedNoteEventIndex, currentPitchAnalysis.events.length - 1);
     fillNoteEditor(); updateCurrentNote(true);
   } catch (error) { noteEditorStatus.textContent = `Could not save arrangement: ${error.message}`; }
@@ -1123,6 +1149,7 @@ playToggleButton.addEventListener('click', async () => {
   } else audioPlayer.pause();
 });
 audioPlayer.addEventListener('play', () => {
+  setNoteEditorVisible(false);
   playToggleButton.textContent = 'Pause';
   startMetronome();
   if (mixerMode) playStemPlayers();

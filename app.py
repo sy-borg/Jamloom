@@ -30,6 +30,10 @@ for directory in (UPLOAD_DIR, JOB_DIR, LIBRARY_DIR):
 
 MAX_UPLOAD_BYTES = int(os.environ.get("JAMLOOM_MAX_UPLOAD_BYTES", os.environ.get("STEMFORGE_MAX_UPLOAD_BYTES", 500 * 1024 * 1024)))
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus", ".aiff", ".aif", ".wma"}
+OPEN_STRING_MIDI = {
+    "guitar": {1: 64, 2: 59, 3: 55, 4: 50, 5: 45, 6: 40},
+    "bass": {1: 43, 2: 38, 3: 33, 4: 28},
+}
 MODELS = {
     "htdemucs": {"vocals", "drums", "bass", "other"},
     "htdemucs_6s": {"vocals", "drums", "bass", "guitar", "piano", "other"},
@@ -596,16 +600,17 @@ async def save_note_arrangement(job_id: str, stem_name: str, payload: dict[str, 
                 string_value, fret_value = int(string_value), int(fret_value)
             except (TypeError, ValueError):
                 raise HTTPException(400, f"Note {index + 1} has an invalid guitar tab position.")
-            open_midi = {1: 64, 2: 59, 3: 55, 4: 50, 5: 45, 6: 40}
+            open_midi = OPEN_STRING_MIDI[stem_name]
             if string_value not in open_midi or not 0 <= fret_value <= 24 or open_midi[string_value] + fret_value != midi:
-                raise HTTPException(400, f"Note {index + 1} has a string/fret position that does not match its pitch.")
+                instrument = "bass" if stem_name == "bass" else "guitar"
+                raise HTTPException(400, f"Note {index + 1} has a {instrument} string/fret position that does not match its pitch.")
         normalized.append({
             "start": start, "end": end, "midi": midi,
             "note": f"{note_names[midi % 12]}{midi // 12 - 1}",
             "frequency_hz": round(440.0 * (2.0 ** ((midi - 69) / 12.0)), 2),
             "confidence": float(event.get("confidence", 1.0)) if str(event.get("confidence", 1.0)).replace('.', '', 1).isdigit() else 1.0,
             "string": string_value, "fret": fret_value,
-            "edited": True,
+            "edited": True, "chord_tone": bool(event.get("chord_tone", False)),
         })
     normalized.sort(key=lambda event: (event["start"], event["end"]))
     target = track_dir(job_id) / f"arrangement-{stem_name}.json"
