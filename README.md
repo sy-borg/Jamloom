@@ -77,3 +77,6 @@ Jamloom's own source code is licensed under the MIT License; see [LICENSE](LICEN
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
+
+
+Latest maintenance release: **0.4.30** starts note-loading requests before re-rendering the note UI and simplifies mobile instrument-change handling. See [CHANGELOG.md](CHANGELOG.md).

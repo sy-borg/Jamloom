@@ -83,17 +83,12 @@ let selectedNoteEventIndex = -1;
 let arrangementDirty = false;
 let noteAnalysisPollTimer = null;
 let noteAnalysisRequestToken = 0;
+let noteAnalysisAbortController = null;
+let notePlaybackAnimationFrame = null;
+let notePlaybackInterval = null;
 const noteStemSelect = document.querySelector('#note-stem-select');
 const analyzeNotesButton = document.querySelector('#analyze-notes-button');
-noteStemSelect.addEventListener('change', () => {
-  const isBass = noteStemSelect.value === 'bass';
-  const stringLabel = editNoteString.closest('label');
-  if (stringLabel) stringLabel.firstChild.textContent = isBass ? 'Bass string ' : 'Guitar string ';
-  const choices = isBass ? [['1','1 · high G'],['2','2 · D'],['3','3 · A'],['4','4 · low E']] : [['1','1 · high E'],['2','2 · B'],['3','3 · G'],['4','4 · D'],['5','5 · A'],['6','6 · low E']];
-  editNoteString.replaceChildren(new Option('Unassigned', ''));
-  choices.forEach(([value, label]) => editNoteString.add(new Option(label, value)));
-  fillNoteEditor(); renderNoteEvents();
-});
+let lastNoteStemSelectionHandled = null;
 
 const noteAnalysisStatus = document.querySelector('#note-analysis-status');
 const currentNoteName = document.querySelector('#current-note-name');
@@ -220,13 +215,20 @@ function renderNoteEvents() {
   if (index < 0) index = events.findIndex(event => event.start > time);
   if (index < 0) index = Math.max(0, events.length - 1);
   // Build shared onset columns once so the tab/fretboard and note buttons use identical widths.
-  const allColumns = [];
-  events.forEach((event, eventIndex) => {
+  // Group note onsets in linear time. Searching the growing column array for
+  // every event becomes quadratic for long recordings and can freeze mobile UI.
+  const columnsByOnset = new Map();
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex++) {
+    const event = events[eventIndex];
     const onset = Math.round(Number(event.start) * 100);
-    let column = allColumns.find(item => item.onset === onset);
-    if (!column) { column = {onset, events: []}; allColumns.push(column); }
+    let column = columnsByOnset.get(onset);
+    if (!column) {
+      column = {onset, events: []};
+      columnsByOnset.set(onset, column);
+    }
     column.events.push({event, eventIndex});
-  });
+  }
+  const allColumns = [...columnsByOnset.values()];
   let activeColumnIndex = allColumns.findIndex(column => column.events.some(item => item.eventIndex === activeNoteEventIndex));
   if (activeColumnIndex < 0) activeColumnIndex = allColumns.findIndex(column => column.events.some(item => item.eventIndex === index));
   if (activeColumnIndex < 0) activeColumnIndex = allColumns.findIndex(column => column.onset > Math.round(time * 100));
@@ -423,6 +425,7 @@ saveNoteArrangementButton.addEventListener('click', async () => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || 'Could not save arrangement.');
+    noteAnalysisCache.delete(noteCacheKey(currentJobId, noteStemSelect.value));
     currentPitchAnalysis.events = result.events; currentPitchAnalysis.arrangement_events = result.events;
     arrangementDirty = false; saveNoteArrangementButton.textContent = 'Save arrangement';
     noteEditorStatus.textContent = result.message || 'Arrangement saved with this track.';
@@ -453,32 +456,85 @@ function updateCurrentNote(forceRender = false) {
     renderNoteEvents();
   }
 }
+function applyPitchAnalysis(data, stemName) {
+  data.suggested_events = data.events.map(event => ({...event}));
+  data.events = (Array.isArray(data.arrangement_events) ? data.arrangement_events : data.events).map(event => ({...event}));
+  currentPitchAnalysis = data; selectedNoteEventIndex = -1; arrangementDirty = false;
+  saveNoteArrangementButton.textContent = 'Save arrangement';
+  noteEditorStatus.textContent = Array.isArray(data.arrangement_events) ? 'Your saved arrangement is loaded. Automatic suggestions remain unchanged.' : 'Edit the suggestions as needed, then save your arrangement.';
+  fillNoteEditor();
+  noteAnalysisStatus.textContent = `${data.events.length} ${Array.isArray(data.arrangement_events) ? 'arrangement notes' : 'note suggestions'} available for ${formatNoteTime(data.duration)}.${data.truncated ? ' Analysis is limited to the first 15 minutes.' : ''} These are estimates, not verified notation.`;
+  analyzeNotesButton.disabled = false; analyzeNotesButton.textContent = 'Re-analyze notes';
+  updateCurrentNote(true);
+}
+// Completed note analyses, keyed by track and stem. Switching instrument is then
+// instant and needs no network request, which matters on phones/tablets where
+// the browser's per-host connection limit can be used up by audio downloads.
+const noteAnalysisCache = new Map();
+function noteCacheKey(jobId, stemName) { return `${jobId}:${stemName}`; }
+function prefetchPitchAnalysis(jobId, stemName) {
+  const key = noteCacheKey(jobId, stemName);
+  if (noteAnalysisCache.has(key)) return Promise.resolve();
+  return fetch(`/api/jobs/${jobId}/notes/${stemName}`, {cache: 'no-store'})
+    .then(response => response.ok ? response.json() : null)
+    .then(data => { if (data && Array.isArray(data.events)) noteAnalysisCache.set(key, data); })
+    .catch(() => {});
+}
+// Stem <audio> elements start with preload="none" so six large WAV downloads
+// cannot occupy every connection before the note requests are sent.
+function releaseStemPreload(jobId) {
+  if (currentJobId !== jobId) return;
+  for (const player of stemPlayers.values()) if (player.audio.preload !== 'auto') player.audio.preload = 'auto';
+}
 async function loadPitchAnalysis(stemName, poll = true) {
   const requestToken = ++noteAnalysisRequestToken;
   if (noteAnalysisPollTimer) { clearTimeout(noteAnalysisPollTimer); noteAnalysisPollTimer = null; }
-  currentPitchAnalysis = null; activeNoteEventIndex = -2; updateCurrentNote(true);
+  if (noteAnalysisAbortController) { noteAnalysisAbortController.abort(); noteAnalysisAbortController = null; }
   if (!currentJobId || !currentStems[stemName]) {
+    currentPitchAnalysis = null; activeNoteEventIndex = -2; updateCurrentNote(true);
     noteAnalysisStatus.textContent = `This track has no ${stemName} stem. Choose another instrument or use the 6-stem separation model.`;
     analyzeNotesButton.disabled = true; analyzeNotesButton.textContent = 'Analyze notes'; return;
   }
+  const cacheKey = noteCacheKey(currentJobId, stemName);
+  const cached = noteAnalysisCache.get(cacheKey);
+  if (cached) {
+    currentPitchAnalysis = null; activeNoteEventIndex = -2;
+    applyPitchAnalysis(JSON.parse(JSON.stringify(cached)), stemName);
+    return;
+  }
+  const controller = new AbortController();
+  noteAnalysisAbortController = controller;
+  // Mobile devices may take longer to transfer a large note-event payload over Wi-Fi.
+  const requestTimeout = setTimeout(() => controller.abort(), 60000);
   analyzeNotesButton.disabled = false; analyzeNotesButton.textContent = 'Re-analyze notes';
+  noteAnalysisStatus.textContent = `Requesting ${stemName} note suggestions…`;
+  // Start the network request before clearing and re-rendering the note UI. On
+  // mobile, rendering a large arrangement can be expensive; it must not prevent
+  // the instrument change from issuing its GET request.
+  let responsePromise;
+  try {
+    responsePromise = fetch(`/api/jobs/${currentJobId}/notes/${stemName}`, {cache: 'no-store', signal: controller.signal});
+  } catch (error) {
+    clearTimeout(requestTimeout);
+    noteAnalysisStatus.textContent = `Could not start note request: ${error.message}`;
+    return;
+  }
+  currentPitchAnalysis = null; activeNoteEventIndex = -2; updateCurrentNote(true);
   noteAnalysisStatus.textContent = `Checking ${stemName} note suggestions…`;
   try {
-    const response = await fetch(`/api/jobs/${currentJobId}/notes/${stemName}`);
-    const data = await response.json();
+    const response = await responsePromise;
+    let data;
+    try { data = await response.json(); }
+    catch { throw new Error(`Server returned an unreadable response (HTTP ${response.status}).`); }
     if (requestToken !== noteAnalysisRequestToken) return;
-    if (response.ok && Array.isArray(data.events)) {
-      data.suggested_events = data.events.map(event => ({...event}));
-      data.events = (Array.isArray(data.arrangement_events) ? data.arrangement_events : data.events).map(event => ({...event}));
-      currentPitchAnalysis = data; selectedNoteEventIndex = -1; arrangementDirty = false;
-      saveNoteArrangementButton.textContent = 'Save arrangement';
-      noteEditorStatus.textContent = Array.isArray(data.arrangement_events) ? 'Your saved arrangement is loaded. Automatic suggestions remain unchanged.' : 'Edit the suggestions as needed, then save your arrangement.';
-      fillNoteEditor();
-      noteAnalysisStatus.textContent = `${data.events.length} ${Array.isArray(data.arrangement_events) ? 'arrangement notes' : 'note suggestions'} available for ${formatNoteTime(data.duration)}.${data.truncated ? ' Analysis is limited to the first 15 minutes.' : ''} These are estimates, not verified notation.`;
-      analyzeNotesButton.disabled = false; analyzeNotesButton.textContent = 'Re-analyze notes';
-      updateCurrentNote(true); return;
+    if (!response.ok && !(response.status === 404 && /not ready/i.test(String(data.detail || '')))) {
+      throw new Error(data.detail || `Server returned HTTP ${response.status}.`);
     }
-    const state = data.status || (response.status === 404 ? 'pending' : 'failed');
+    if (response.ok && Array.isArray(data.events)) {
+      noteAnalysisCache.set(cacheKey, JSON.parse(JSON.stringify(data)));
+      applyPitchAnalysis(data, stemName); return;
+    }
+    const state = data.status || 'failed';
     noteAnalysisStatus.textContent = data.message || (state === 'pending' || state === 'running' ? `Analyzing ${stemName} notes in the background…` : `Note analysis is not ready (${state}).`);
     if (state === 'pending' || state === 'running') {
       analyzeNotesButton.disabled = true; analyzeNotesButton.textContent = 'Analyzing…';
@@ -488,11 +544,34 @@ async function loadPitchAnalysis(stemName, poll = true) {
     }
   } catch (error) {
     if (requestToken !== noteAnalysisRequestToken) return;
-    noteAnalysisStatus.textContent = `Could not load note suggestions: ${error.message}`;
+    const reason = error.name === 'AbortError'
+      ? 'The request timed out after 60 seconds. Check the connection to Jamloom and retry.'
+      : error.message;
+    noteAnalysisStatus.textContent = `Could not load note suggestions: ${reason}`;
     analyzeNotesButton.disabled = false; analyzeNotesButton.textContent = 'Retry analysis';
+  } finally {
+    clearTimeout(requestTimeout);
+    if (noteAnalysisAbortController === controller) noteAnalysisAbortController = null;
   }
 }
-noteStemSelect.addEventListener('change', () => { selectedNoteEventIndex = -1; loadPitchAnalysis(noteStemSelect.value); });
+function handleNoteStemSelectionChange() {
+  const stemName = noteStemSelect.value;
+  // Do not deduplicate input/change here: some mobile browsers dispatch these
+  // differently. A newer request aborts the previous one in loadPitchAnalysis.
+  lastNoteStemSelectionHandled = stemName;
+  const isBass = stemName === 'bass';
+  const stringLabel = editNoteString.closest('label');
+  if (stringLabel) stringLabel.firstChild.textContent = isBass ? 'Bass string ' : 'Guitar string ';
+  const choices = isBass ? [['1','1 · high G'],['2','2 · D'],['3','3 · A'],['4','4 · low E']] : [['1','1 · high E'],['2','2 · B'],['3','3 · G'],['4','4 · D'],['5','5 · A'],['6','6 · low E']];
+  editNoteString.replaceChildren(new Option('Unassigned', ''));
+  choices.forEach(([value, label]) => editNoteString.add(new Option(label, value)));
+  selectedNoteEventIndex = -1;
+  loadPitchAnalysis(stemName);
+}
+// Native selects normally emit change; input is retained as a mobile fallback.
+// Call directly so the GET is initiated before any potentially costly UI render.
+noteStemSelect.addEventListener('input', handleNoteStemSelectionChange);
+noteStemSelect.addEventListener('change', handleNoteStemSelectionChange);
 analyzeNotesButton.addEventListener('click', async () => {
   if (!currentJobId) return;
   const stemName = noteStemSelect.value;
@@ -502,6 +581,7 @@ analyzeNotesButton.addEventListener('click', async () => {
     const response = await fetch(`/api/jobs/${currentJobId}/notes/${stemName}`, {method: 'POST'});
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail || 'Analysis failed.');
+    noteAnalysisCache.delete(noteCacheKey(currentJobId, stemName));
     currentPitchAnalysis = result; activeNoteEventIndex = -2;
     analyzeNotesButton.textContent = 'Re-analyze notes';
     noteAnalysisStatus.textContent = `${result.events.length} note events detected in ${formatNoteTime(result.duration)}.${result.truncated ? ' Analysis is limited to the first 15 minutes.' : ''} Treat these as estimates, not verified notation.`;
@@ -776,9 +856,75 @@ function updateStemAudioLevels() {
   document.querySelector('#metronome-row')?.classList.toggle('stem-soloed', soloedStem === '__metronome');
   updateMetronomeBpmDisplay();
 }
+// In stem-mixer mode the main <audio> element is only a clock for the slider,
+// time display, loop, and note/fretboard highlighting. Playing the real backing
+// mix there means a seventh large network stream: on phones it stalls, the UI
+// freezes while the stems keep playing, and stem drift-correction then seeks the
+// stems back. Instead the clock plays a locally generated silent WAV (no network).
+let currentBackingUrl = '';
+let currentTrackDuration = 0;
+let silentClockUrl = null;
+let silentClockSeconds = 0;
+let clockKind = '';
+function buildSilentClockUrl(seconds) {
+  const rate = 8000;
+  const samples = Math.max(rate, Math.round(seconds * rate));
+  const bytes = new Uint8Array(44 + samples);
+  const view = new DataView(bytes.buffer);
+  const text = (offset, value) => { for (let i = 0; i < value.length; i++) bytes[offset + i] = value.charCodeAt(i); };
+  text(0, 'RIFF'); view.setUint32(4, 36 + samples, true); text(8, 'WAVE'); text(12, 'fmt ');
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, rate, true); view.setUint32(28, rate, true); view.setUint16(32, 1, true); view.setUint16(34, 8, true);
+  text(36, 'data'); view.setUint32(40, samples, true);
+  bytes.fill(0x80, 44); // unsigned 8-bit PCM silence
+  return URL.createObjectURL(new Blob([bytes], {type: 'audio/wav'}));
+}
+function setClockSource(wantSilent, reset = false) {
+  const silent = Boolean(wantSilent) && currentTrackDuration > 0;
+  const kind = silent ? 'silent' : 'backing';
+  if (!reset && clockKind === kind && audioPlayer.getAttribute('src')) return;
+  const time = reset ? 0 : (audioPlayer.currentTime || 0);
+  const wasPlaying = !reset && !audioPlayer.paused;
+  const rate = reset ? 1 : audioPlayer.playbackRate;
+  clockKind = kind;
+  if (silent) {
+    if (!silentClockUrl || Math.abs(silentClockSeconds - currentTrackDuration) > 0.0005) {
+      if (silentClockUrl) URL.revokeObjectURL(silentClockUrl);
+      silentClockUrl = buildSilentClockUrl(currentTrackDuration); silentClockSeconds = currentTrackDuration;
+    }
+    audioPlayer.src = silentClockUrl;
+  } else {
+    audioPlayer.src = currentBackingUrl;
+  }
+  audioPlayer.playbackRate = rate; setPitchPreservation(audioPlayer);
+  if (time > 0 || wasPlaying) {
+    audioPlayer.addEventListener('loadedmetadata', () => {
+      try { audioPlayer.currentTime = time; } catch {}
+      audioPlayer.playbackRate = rate;
+      if (wasPlaying) audioPlayer.play().catch(() => {});
+    }, {once: true});
+  }
+}
+// Paused stems keep downloading in the background. On HTTP/1.1 that can occupy
+// every browser connection and leave the backing-mix request queued forever, so
+// stems drop their network connection while the backing mix is in use.
+function releaseStemNetwork() {
+  for (const player of stemPlayers.values()) {
+    player.audio.pause();
+    const src = player.audio.getAttribute('src');
+    if (src) { player.savedSrc = src; player.audio.removeAttribute('src'); player.audio.load(); }
+  }
+}
+function restoreStemNetwork() {
+  for (const player of stemPlayers.values()) {
+    if (!player.audio.getAttribute('src') && player.savedSrc) { player.audio.preload = 'auto'; player.audio.src = player.savedSrc; }
+  }
+}
 function setMixerMode(enabled) {
   mixerMode = enabled;
-  audioPlayer.muted = enabled;
+  if (enabled) restoreStemNetwork(); else releaseStemNetwork();
+  setClockSource(enabled && stemPlayers.size > 0);
+  audioPlayer.muted = enabled && clockKind === 'backing';
   audioPlayer.volume = masterGain();
   stemsToggle.textContent = enabled ? 'Use backing mix' : 'Use stem mixer';
   stemsList.classList.toggle('mixer-active', enabled);
@@ -808,7 +954,7 @@ function renderStems(stems) {
     const label = document.createElement('strong'); label.textContent = name[0].toUpperCase() + name.slice(1);
     const value = document.createElement('span'); value.className = 'stem-level-value'; value.textContent = '100%';
     info.append(label, value);
-    const audio = document.createElement('audio'); audio.preload = 'auto'; audio.src = url; audio.loop = false;
+    const audio = document.createElement('audio'); audio.preload = 'none'; audio.src = url; audio.loop = false;
     audio.playbackRate = audioPlayer.playbackRate;
     setPitchPreservation(audio);
     audio.addEventListener('loadedmetadata', () => { try { audio.currentTime = audioPlayer.currentTime || 0; } catch {} });
@@ -1096,11 +1242,16 @@ function formatTime(seconds) {
   const secs = whole % 60;
   return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}` : `${minutes}:${String(secs).padStart(2, '0')}`;
 }
+let seekDragging = false;
+// :active is unreliable on touch screens (it can stay set after a tap, which
+// would freeze the slider), so track dragging explicitly.
+['pointerdown', 'touchstart', 'mousedown'].forEach(type => playbackSeek.addEventListener(type, () => { seekDragging = true; }, {passive: true}));
+['pointerup', 'pointercancel', 'touchend', 'touchcancel', 'mouseup', 'change', 'blur'].forEach(type => playbackSeek.addEventListener(type, () => { seekDragging = false; updateTimeDisplay(); }));
 function updateTimeDisplay() {
   const current = Number.isFinite(audioPlayer.currentTime) ? audioPlayer.currentTime : 0;
   const duration = Number.isFinite(audioPlayer.duration) ? audioPlayer.duration : 0;
   timeDisplay.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
-  if (playbackSeek && !playbackSeek.matches(':active')) {
+  if (playbackSeek && !seekDragging) {
     playbackSeek.max = String(Math.max(1, Math.round(duration * 10)));
     playbackSeek.value = String(Math.round(current * 10));
   }
@@ -1137,7 +1288,7 @@ function resetLoop() {
   loopMessage.textContent = 'Set A and B while playing or seeking, then turn looping on.';
   saveTrackSettings();
 }
-playbackSeek.addEventListener('input', () => { if (Number.isFinite(audioPlayer.duration)) audioPlayer.currentTime = Math.min(audioPlayer.duration, Number(playbackSeek.value) / 10); });
+playbackSeek.addEventListener('input', () => { if (Number.isFinite(audioPlayer.duration)) audioPlayer.currentTime = Math.min(audioPlayer.duration, Number(playbackSeek.value) / 10); updateTimeDisplay(); });
 rewindButton.addEventListener('click', () => { audioPlayer.currentTime = Math.max(0, (audioPlayer.currentTime || 0) - 5); });
 forwardButton.addEventListener('click', () => {
   const end = Number.isFinite(audioPlayer.duration) ? audioPlayer.duration : Infinity;
@@ -1148,19 +1299,45 @@ playToggleButton.addEventListener('click', async () => {
     try { await audioPlayer.play(); } catch (err) { tempoMessage.textContent = `Playback could not start: ${err.message}`; }
   } else audioPlayer.pause();
 });
+function startNotePlaybackUpdates() {
+  if (notePlaybackInterval !== null) return;
+  // Use a timer rather than relying on animation frames: mobile browsers may
+  // throttle requestAnimationFrame even while media audio continues playing.
+  const tick = () => {
+    try {
+      updateTimeDisplay();
+      updateCurrentNote();
+    } catch (error) {
+      console.error('Playback UI update failed:', error);
+    }
+    if (audioPlayer.paused || audioPlayer.ended) stopNotePlaybackUpdates();
+  };
+  tick();
+  notePlaybackInterval = setInterval(tick, 80);
+}
+function stopNotePlaybackUpdates() {
+  if (notePlaybackInterval !== null) clearInterval(notePlaybackInterval);
+  notePlaybackInterval = null;
+  if (notePlaybackAnimationFrame !== null) cancelAnimationFrame(notePlaybackAnimationFrame);
+  notePlaybackAnimationFrame = null;
+  updateTimeDisplay();
+  updateCurrentNote();
+}
 audioPlayer.addEventListener('play', () => {
   setNoteEditorVisible(false);
   playToggleButton.textContent = 'Pause';
   startMetronome();
+  startNotePlaybackUpdates();
   if (mixerMode) playStemPlayers();
 });
 audioPlayer.addEventListener('pause', () => {
   playToggleButton.textContent = 'Play';
   stopMetronome();
+  stopNotePlaybackUpdates();
   for (const player of stemPlayers.values()) player.audio.pause();
 });
-audioPlayer.addEventListener('seeking', () => { syncStemPlayers(true); resetMetronomeGrid(); });
-audioPlayer.addEventListener('seeked', () => { syncStemPlayers(true); updateCurrentNote(true); });
+audioPlayer.addEventListener('seeking', () => { syncStemPlayers(true); resetMetronomeGrid(); updateTimeDisplay(); });
+audioPlayer.addEventListener('seeked', () => { syncStemPlayers(true); updateTimeDisplay(); updateCurrentNote(true); });
 audioPlayer.addEventListener('ratechange', () => { syncStemPlayers(true); updateMetronomeBpmDisplay(); resetMetronomeGrid(); });
 audioPlayer.addEventListener('timeupdate', () => {
   updateTimeDisplay();
@@ -1170,7 +1347,14 @@ audioPlayer.addEventListener('timeupdate', () => {
   }
   syncStemPlayers(false);
 });
-audioPlayer.addEventListener('ended', () => { stopMetronome(); playToggleButton.textContent = 'Play'; });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  updateTimeDisplay(); updateCurrentNote(true);
+  if (!audioPlayer.paused && !audioPlayer.ended) startNotePlaybackUpdates();
+});
+audioPlayer.addEventListener('ended', () => { stopMetronome(); stopNotePlaybackUpdates(); playToggleButton.textContent = 'Play'; });
+audioPlayer.addEventListener('loadedmetadata', updateTimeDisplay);
+audioPlayer.addEventListener('durationchange', updateTimeDisplay);
 audioPlayer.addEventListener('loadedmetadata', updateTimeDisplay);
 audioPlayer.addEventListener('durationchange', updateTimeDisplay);
 setLoopStartButton.addEventListener('click', () => {
@@ -1249,7 +1433,8 @@ function loadCompletedTrack(job, fromLibrary = false) {
   metronomeMuted = false; metronomeDownbeatOffset = 0; metronomeBpmInput = null; metronomeLevelInput = null; metronomeLevelValue = null; metronomeMuteButton = null; metronomeSoloButton = null;
   playerArea.hidden = false; mixerEmptyState.hidden = true; separatorPanel.hidden = true; jobProgress.hidden = true; currentJobId = job.id; setPracticeMode(practiceMode, false);
   document.querySelector('#result-filename').textContent = job.title || (job.filename || 'Backing track').replace(/\.[^.]+$/, '');
-  audioPlayer.src = job.backing_url; audioPlayer.volume = masterGain(); audioPlayer.playbackRate = 1; speedSelect.value = '1';
+  currentBackingUrl = job.backing_url; currentTrackDuration = Number(job.duration) || 0; clockKind = '';
+  setClockSource(Object.keys(job.stems || {}).length > 0, true); audioPlayer.volume = masterGain(); audioPlayer.playbackRate = 1; speedSelect.value = '1';
   loopStart = null; loopEnd = null; loopEnabled = false; updateLoopUI(); updateTimeDisplay();
   currentTrackBpm = job.bpm == null ? null : Number(job.bpm);
   currentTrackTimeSignature = job.time_signature || '';
@@ -1260,9 +1445,21 @@ function loadCompletedTrack(job, fromLibrary = false) {
   for (const name of noteChoices) { const option = document.createElement('option'); option.value = name; option.textContent = name[0].toUpperCase() + name.slice(1); noteStemSelect.append(option); }
   if (!noteChoices.length) { const option = document.createElement('option'); option.value = 'bass'; option.textContent = 'Bass (not available)'; noteStemSelect.append(option); }
   noteStemSelect.value = noteChoices.includes('bass') ? 'bass' : (noteChoices[0] || 'bass');
+  lastNoteStemSelectionHandled = noteStemSelect.value;
+  const initialIsBass = noteStemSelect.value === 'bass';
+  const initialStringLabel = editNoteString.closest('label');
+  if (initialStringLabel) initialStringLabel.firstChild.textContent = initialIsBass ? 'Bass string ' : 'Guitar string ';
+  const initialStringChoices = initialIsBass ? [['1','1 · high G'],['2','2 · D'],['3','3 · A'],['4','4 · low E']] : [['1','1 · high E'],['2','2 · B'],['3','3 · G'],['4','4 · D'],['5','5 · A'],['6','6 · low E']];
+  editNoteString.replaceChildren(new Option('Unassigned', ''));
+  initialStringChoices.forEach(([value, label]) => editNoteString.add(new Option(label, value)));
   mixerModelLabel.textContent = job.model === 'htdemucs_6s' ? '6 stems · vocals, drums, bass, guitar, piano, other' : '4 stems · vocals, drums, bass, other';
+  // Issue the note requests first, then let the large audio downloads start.
+  const initialJobId = job.id;
+  const initialNotes = loadPitchAnalysis(noteStemSelect.value);
+  const otherNotes = noteChoices.filter(name => name !== noteStemSelect.value).map(name => prefetchPitchAnalysis(initialJobId, name));
   renderStems(currentStems);
-  loadPitchAnalysis(noteStemSelect.value);
+  Promise.race([Promise.allSettled([initialNotes, ...otherNotes]), new Promise(resolve => setTimeout(resolve, 10000))])
+    .then(() => releaseStemPreload(initialJobId));
   loadMusicXml();
   restoreTrackSettings(job.id);
   jobMessage.textContent = `${job.title || (job.filename || 'Track').replace(/\.[^.]+$/, '')}${job.artist ? ' · ' + job.artist : ''}${fromLibrary ? ' · Loaded from your library' : ' · Saved to your library'}`;
@@ -1298,7 +1495,7 @@ form.addEventListener('submit', async e => {
   if (!fileInput.files.length) return;
   if (pollTimer) clearInterval(pollTimer);
   separatorPanel.hidden = false; errorBox.hidden = true; jobProgress.hidden = false; mixerEmptyState.hidden = false; playerArea.hidden = true; currentJobId = null;
-  audioPlayer.pause(); stopMetronome(); audioPlayer.muted = false; audioPlayer.removeAttribute('src'); audioPlayer.load();
+  audioPlayer.pause(); stopMetronome(); audioPlayer.muted = false; clockKind = ''; audioPlayer.removeAttribute('src'); audioPlayer.load();
   stopStemPlayers(); mixerMode = false; soloedStem = null; stemsList.hidden = false; stemsToggle.textContent = 'Use backing mix';
   jobMessage.textContent = 'Preparing your new track…'; progressBar.style.width = '3%';
   submitButton.disabled = true; submitButton.querySelector('span:first-child').textContent = 'Processing…';

@@ -1,4 +1,40 @@
+## 0.4.33
+- Fixed "Use backing mix" showing 0:00 / 0:00 and playing nothing on mobile: paused stems kept downloading and used up the browser's connection limit, so the backing-mix request never started. Stems now release their connections while the backing mix is active and reload when you switch back to the stem mixer.
+
+## 0.4.32
+- Fixed unreliable slider, time display, and note/fretboard updates on phones and tablets. In stem-mixer mode the muted main player was streaming the full backing mix over the network and could stall while the stems kept playing; it is now a locally generated silent clock with no network dependency. Switching to "Use backing mix" swaps back to the real backing track at the same position and speed.
+- The seek slider no longer relies on `:active` (which can stay set on touch screens and freeze the slider); dragging is tracked explicitly.
+- Playback UI refreshes immediately when the page becomes visible again.
+
+## 0.4.31
+- Fixed instrument selection never reaching the server on phones and tablets: stem `<audio>` elements now start with `preload="none"`, so large WAV downloads can no longer occupy the browser's per-host connection limit and leave the note GET queued until it times out. Stem loading is released once the note requests have completed (or after 10 seconds).
+- Note requests are now issued before the stem audio elements are created, and the other instrument's notes are prefetched, so switching instrument is served from memory without a network request. The cache is cleared when notes are re-analyzed or an arrangement is saved.
+
+## 0.4.30
+- Start the note-suggestion GET request before clearing/re-rendering note UI, so expensive mobile rendering cannot prevent the request from being issued.
+- Handle native-select `input` and `change` events directly without deferring or suppressing either event; newer requests abort older ones.
+
+## 0.4.29
+- Reworked note-onset grouping to use a map, reducing fretboard/tab rendering from quadratic to linear grouping work for long note arrangements.
+- Made mobile instrument selection respond to both `input` and `change`, deferring the handler until the selected value settles and deduplicating repeated events.
+- Corrected the note-loading timeout message to match the configured 60-second timeout.
+
+## 0.4.28
+- Fixed note-loading errors so HTTP 404 responses are not mistaken for pending analysis; the server's actual error is shown.
+- Increased the note-suggestion request timeout to accommodate larger event payloads on mobile networks.
+- Replaced playback UI animation-frame polling with a lightweight timer so the time display, seek slider, detected notes, and fretboard continue updating on mobile browsers that throttle animation frames.
+
 # Changelog
+
+## 0.4.27
+- Added a 15-second timeout and explicit recovery message for note-analysis GET requests that stall, and disabled caching for these requests.
+- Simplified mobile instrument selection to the native `change` event to avoid intermediate or duplicate requests.
+- Updated the playback clock and seek slider from the same animation-frame loop as note/fretboard highlighting, while keeping seek/seeked updates immediate.
+
+## 0.4.26
+- Made instrument selection respond to either native-select `input` or `change` events, with duplicate-event protection, so mobile selection reliably triggers note-analysis loading.
+- Added a lightweight animation-frame update while playback is running to keep note and fretboard highlighting synchronized on mobile browsers with throttled `timeupdate` events.
+
 
 Notable changes by release. Earlier versions introduced the core stem-separation, practice, and library workflows; this file records the main milestones and recent refinements.
 
