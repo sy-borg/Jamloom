@@ -351,8 +351,10 @@ async function auditionSelectedStemNote(event) {
   const audio = player.audio;
   // In backing-mix mode stem URLs are deliberately released to save browser connections.
   if (!audio.getAttribute('src') && player.savedSrc) { audio.src = player.savedSrc; audio.load(); }
-  // Audition only the selected instrument, with a little context around the note.
-  const start = Math.max(0, (Number(event.start) || 0) - 0.12);
+  // Audition exactly the selected note on its instrument stem, without context.
+  const start = Number(event.start);
+  const end = Number(event.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
   for (const other of stemPlayers.values()) other.audio.pause();
   noteStemAuditionPlayer = player;
   noteStemAuditionWasMuted = audio.muted;
@@ -368,12 +370,14 @@ async function auditionSelectedStemNote(event) {
       });
     }
     const songDuration = Number.isFinite(audio.duration) ? audio.duration : Infinity;
-    const end = Math.min(songDuration, Math.max(Number(event.end) || (Number(event.start) || 0) + 0.35, (Number(event.start) || 0) + 0.35) + 0.18);
-    audio.currentTime = Math.min(start, Number.isFinite(audio.duration) ? audio.duration : start);
+    const boundedStart = Math.min(Math.max(0, start), songDuration);
+    const boundedEnd = Math.min(end, songDuration);
+    if (boundedEnd <= boundedStart) return;
+    audio.currentTime = boundedStart;
     await audio.play();
     noteStemAuditionTimer = setInterval(() => {
-      if (!noteStemAuditionPlayer || audio.currentTime >= end || audio.ended || audio.paused) stopNoteStemAudition();
-    }, 40);
+      if (!noteStemAuditionPlayer || audio.currentTime >= boundedEnd || audio.ended || audio.paused) stopNoteStemAudition();
+    }, 10);
   } catch (error) {
     stopNoteStemAudition();
     console.debug('Jamloom could not audition this stem note:', error);

@@ -79,4 +79,4 @@ Jamloom's own source code is licensed under the MIT License; see [LICENSE](LICEN
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 
-Latest release: **0.4.38** lets you audition a selected note from its instrument stem while keeping the main player paused. See [CHANGELOG.md](CHANGELOG.md).
+Latest release: **0.4.39** auditions exactly the selected note duration from its instrument stem while keeping the main player paused. See [CHANGELOG.md](CHANGELOG.md).

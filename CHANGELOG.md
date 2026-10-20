@@ -1,3 +1,6 @@
+## 0.4.39
+- Note auditions now play exactly the selected note's recorded start-to-end duration, with no lead-in or tail margin and no minimum-length extension.
+
 ## 0.4.38
 - Fixed note selection so the editor remains open while the player stays paused.
 - Clicking a note always seeks the main timeline to that note. Only when the player is paused, Jamloom briefly auditions the selected instrument stem with a little margin before and after the note, without switching the main player to Playing. This also works while the backing mix is selected.
