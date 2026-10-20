@@ -1,3 +1,23 @@
+## 0.4.38
+- Fixed note selection so the editor remains open while the player stays paused.
+- Clicking a note always seeks the main timeline to that note. Only when the player is paused, Jamloom briefly auditions the selected instrument stem with a little margin before and after the note, without switching the main player to Playing. This also works while the backing mix is selected.
+- Starting normal playback or changing the selected instrument stops any isolated stem audition.
+
+## 0.4.37
+- Clicking a detected note seeks to its original audio position and briefly plays that audio excerpt, then pauses at the note end (with a short minimum audition length for very brief notes). Works with backing-mix and stem-mixer playback without synthesizing a tone.
+
+## 0.4.36
+- Keeps supported mobile screens awake during playback using the Screen Wake Lock API; releases the lock on pause/end and reacquires it when returning to the app during playback. Unsupported browsers continue normally.
+
+## 0.4.35
+- Replaced the generic loaded-track subtitle with song metadata (artist, album, BPM, time signature and duration when available).
+- Made the loaded song title more prominent in a distinct heading panel.
+- Updated the browser tab title to include the loaded song, its metadata, and Playing / Paused / Ended status.
+
+## 0.4.34
+- Replaced text labels on the practice transport with Unicode playback glyphs and accessible button labels.
+- Added a jump-to-beginning control and increased transport button height for easier touch use.
+
 ## 0.4.33
 - Fixed "Use backing mix" showing 0:00 / 0:00 and playing nothing on mobile: paused stems kept downloading and used up the browser's connection limit, so the backing-mix request never started. Stems now release their connections while the backing mix is active and reload when you switch back to the stem mixer.
 

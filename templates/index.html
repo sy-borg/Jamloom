@@ -7,7 +7,7 @@
   <title>Jamloom — play your part</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=0.4.11">
   <link rel="alternate icon" href="/static/favicon.ico?v=0.4.11">
-  <link rel="stylesheet" href="/static/style.css?v=0.4.17">
+  <link rel="stylesheet" href="/static/style.css?v=0.4.35">
 </head>
 <body>
   <main class="shell">
@@ -67,7 +67,7 @@
       <div class="section-heading player-section-heading"><span class="step">02</span><div><h2 id="mixer-page-heading">Practice studio</h2><p id="job-message">Select a song in your library to resume practising.</p></div><button id="practice-mode-toggle" class="button secondary" type="button" aria-pressed="true">Show mixer</button></div>
       <div id="mixer-empty-state" class="mixer-empty-state"><span class="empty-icon">♫</span><strong>Your next jam starts here</strong><span>Open a song from your library, or create a new backing track above.</span></div>
       <div id="player-area" hidden>
-        <div class="track-title"><span class="equalizer">▥</span><div><strong id="result-filename">Backing track</strong><span>WAV · mixed stems</span></div></div>
+        <div class="track-title"><span class="equalizer" aria-hidden="true">♫</span><div class="track-title-copy"><strong id="result-filename">Backing track</strong><span id="result-metadata">Mixed backing track</span></div></div>
         <audio id="audio-player" controls preload="metadata"></audio>
         <section id="note-display" class="note-display" aria-label="Note display">
           <div class="note-display-heading"><span class="note-symbol">♪</span><div><strong>Note detection</strong><span>Experimental · octave checks · best with single bass notes</span></div></div>
@@ -127,9 +127,10 @@
           <input id="playback-seek" class="playback-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Seek through song">
           <p class="shortcut-hint">Shortcuts: <kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> ±5s · <kbd>A</kbd>/<kbd>B</kbd> set loop points · <kbd>L</kbd> toggle loop</p>
           <div class="transport-controls" aria-label="Playback navigation">
-            <button id="rewind-button" class="button ghost" type="button" title="Rewind 5 seconds">↶ 5s</button>
-            <button id="play-toggle-button" type="button">Play</button>
-            <button id="forward-button" class="button ghost" type="button" title="Forward 5 seconds">5s ↷</button>
+            <button id="beginning-button" class="button ghost" type="button" title="Jump to beginning" aria-label="Jump to beginning">⏮</button>
+            <button id="rewind-button" class="button ghost" type="button" title="Back 5 seconds" aria-label="Back 5 seconds">⏪</button>
+            <button id="play-toggle-button" type="button" title="Play" aria-label="Play">▶</button>
+            <button id="forward-button" class="button ghost" type="button" title="Forward 5 seconds" aria-label="Forward 5 seconds">⏩</button>
           </div>
           <div class="loop-controls">
             <div class="loop-markers"><span>Loop start <strong id="loop-start-display">Not set</strong></span><span>Loop end <strong id="loop-end-display">Not set</strong></span></div>

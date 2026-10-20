@@ -10,7 +10,7 @@ Jamloom is a local-first music practice app. Import a track, separate it into st
 
 - **Local track library** — keep processed tracks, search and sort the library, edit song metadata, and manage disk usage.
 - **Stem separation** — use Demucs to create backing tracks and individual instrument stems; play, mix, mute, solo, and download stems.
-- **Practice controls** — seek, loop a section, adjust playback speed, and use the metronome.
+- **Practice controls** — seek, loop a section, adjust playback speed, and use the metronome. Supported mobile browsers can keep the screen awake during playback.
 - **Editable note arrangements** — inspect automatically detected bass/guitar notes, edit pitch and timing, and add or remove tones. Save changes separately from the original analysis.
 - **Guitar and bass tablature** — view detected notes on a six-string guitar or four-string bass fretboard. Edit string and fret positions; a chosen position determines the note pitch. Chord tones can share a playback-time column.
 - **Local persistence** — processed tracks and saved arrangements remain in the library across server restarts.
@@ -79,4 +79,4 @@ Jamloom's own source code is licensed under the MIT License; see [LICENSE](LICEN
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 
-Latest maintenance release: **0.4.30** starts note-loading requests before re-rendering the note UI and simplifies mobile instrument-change handling. See [CHANGELOG.md](CHANGELOG.md).
+Latest release: **0.4.38** lets you audition a selected note from its instrument stem while keeping the main player paused. See [CHANGELOG.md](CHANGELOG.md).

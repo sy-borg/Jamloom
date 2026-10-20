@@ -16,6 +16,7 @@ const stemsList = document.querySelector('#stems-list');
 const mixerModelLabel = document.querySelector('#mixer-model-label');
 const masterVolume = document.querySelector('#master-volume');
 const masterVolumeValue = document.querySelector('#master-volume-value');
+const beginningButton = document.querySelector('#beginning-button');
 const rewindButton = document.querySelector('#rewind-button');
 const playToggleButton = document.querySelector('#play-toggle-button');
 const forwardButton = document.querySelector('#forward-button');
@@ -86,6 +87,48 @@ let noteAnalysisRequestToken = 0;
 let noteAnalysisAbortController = null;
 let notePlaybackAnimationFrame = null;
 let notePlaybackInterval = null;
+let noteAuditionEndTime = null;
+let noteStemAuditionTimer = null;
+let noteStemAuditionPlayer = null;
+let noteStemAuditionWasMuted = false;
+let screenWakeLock = null;
+let screenWakeLockRequest = null;
+
+async function requestScreenWakeLock() {
+  if (!('wakeLock' in navigator) || document.hidden || audioPlayer.paused || audioPlayer.ended) return;
+  if (screenWakeLock && !screenWakeLock.released) return;
+  if (screenWakeLockRequest) return screenWakeLockRequest;
+
+  screenWakeLockRequest = navigator.wakeLock.request('screen').then(sentinel => {
+    // Playback may have paused or the page may have been backgrounded while
+    // the browser was resolving the request.
+    if (document.hidden || audioPlayer.paused || audioPlayer.ended) {
+      sentinel.release().catch(() => {});
+      return;
+    }
+    screenWakeLock = sentinel;
+    sentinel.addEventListener('release', () => {
+      if (screenWakeLock === sentinel) screenWakeLock = null;
+    }, { once: true });
+  }).catch(error => {
+    // Wake Lock is optional; unsupported browsers and power policies should
+    // never interfere with playback.
+    console.debug('Jamloom could not acquire a screen wake lock:', error);
+  }).finally(() => {
+    screenWakeLockRequest = null;
+  });
+  return screenWakeLockRequest;
+}
+
+async function releaseScreenWakeLock() {
+  const sentinel = screenWakeLock;
+  screenWakeLock = null;
+  if (sentinel && !sentinel.released) {
+    try { await sentinel.release(); } catch (error) {
+      console.debug('Jamloom could not release the screen wake lock:', error);
+    }
+  }
+}
 const noteStemSelect = document.querySelector('#note-stem-select');
 const analyzeNotesButton = document.querySelector('#analyze-notes-button');
 let lastNoteStemSelectionHandled = null;
@@ -282,16 +325,75 @@ function renderNoteEvents() {
       const timestamp = document.createElement('span'); timestamp.className = 'note-event-time'; timestamp.textContent = formatNoteTime(event.start);
       detailLine.append(frequency, timestamp);
       button.append(noteLine, detailLine);
-      button.addEventListener('click', () => {
+      button.addEventListener('click', async () => {
+        const wasPaused = audioPlayer.paused;
         selectedNoteEventIndex = eventIndex;
-        if (audioPlayer.paused) setNoteEditorVisible(true); else setNoteEditorVisible(false);
-        audioPlayer.currentTime = event.start; fillNoteEditor(); updateCurrentNote(true);
+        // Seeking is unconditional, but note audition must never start the main player.
+        audioPlayer.currentTime = Number(event.start) || 0;
+        updateCurrentNote(true);
+        if (wasPaused) {
+          setNoteEditorVisible(true);
+          fillNoteEditor();
+          await auditionSelectedStemNote(event);
+        }
       });
       columnEl.append(button);
     });
     noteEventsContainer.append(columnEl);
   });
 }
+
+async function auditionSelectedStemNote(event) {
+  stopNoteStemAudition();
+  const stemName = noteStemSelect.value;
+  const player = stemPlayers.get(stemName);
+  if (!player || !currentStems[stemName]) return;
+  const audio = player.audio;
+  // In backing-mix mode stem URLs are deliberately released to save browser connections.
+  if (!audio.getAttribute('src') && player.savedSrc) { audio.src = player.savedSrc; audio.load(); }
+  // Audition only the selected instrument, with a little context around the note.
+  const start = Math.max(0, (Number(event.start) || 0) - 0.12);
+  for (const other of stemPlayers.values()) other.audio.pause();
+  noteStemAuditionPlayer = player;
+  noteStemAuditionWasMuted = audio.muted;
+  audio.muted = false;
+  try {
+    if (audio.readyState < 1) {
+      await new Promise((resolve, reject) => {
+        const loaded = () => { cleanup(); resolve(); };
+        const failed = () => { cleanup(); reject(new Error('Stem audio could not be loaded')); };
+        const cleanup = () => { audio.removeEventListener('loadedmetadata', loaded); audio.removeEventListener('error', failed); };
+        audio.addEventListener('loadedmetadata', loaded, { once: true });
+        audio.addEventListener('error', failed, { once: true });
+      });
+    }
+    const songDuration = Number.isFinite(audio.duration) ? audio.duration : Infinity;
+    const end = Math.min(songDuration, Math.max(Number(event.end) || (Number(event.start) || 0) + 0.35, (Number(event.start) || 0) + 0.35) + 0.18);
+    audio.currentTime = Math.min(start, Number.isFinite(audio.duration) ? audio.duration : start);
+    await audio.play();
+    noteStemAuditionTimer = setInterval(() => {
+      if (!noteStemAuditionPlayer || audio.currentTime >= end || audio.ended || audio.paused) stopNoteStemAudition();
+    }, 40);
+  } catch (error) {
+    stopNoteStemAudition();
+    console.debug('Jamloom could not audition this stem note:', error);
+  }
+}
+function stopNoteStemAudition() {
+  if (noteStemAuditionTimer !== null) clearInterval(noteStemAuditionTimer);
+  noteStemAuditionTimer = null;
+  if (noteStemAuditionPlayer) {
+    const player = noteStemAuditionPlayer;
+    player.audio.pause();
+    player.audio.muted = noteStemAuditionWasMuted;
+    if (!mixerMode && player.savedSrc && player.audio.getAttribute('src')) {
+      player.audio.removeAttribute('src');
+      player.audio.load();
+    }
+  }
+  noteStemAuditionPlayer = null;
+}
+
 function midiToNote(midi) {
   const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
   return `${names[midi % 12]}${Math.floor(midi / 12) - 1}`;
@@ -570,8 +672,8 @@ function handleNoteStemSelectionChange() {
 }
 // Native selects normally emit change; input is retained as a mobile fallback.
 // Call directly so the GET is initiated before any potentially costly UI render.
-noteStemSelect.addEventListener('input', handleNoteStemSelectionChange);
-noteStemSelect.addEventListener('change', handleNoteStemSelectionChange);
+noteStemSelect.addEventListener('input', () => { stopNoteStemAudition(); handleNoteStemSelectionChange(); });
+noteStemSelect.addEventListener('change', () => { stopNoteStemAudition(); handleNoteStemSelectionChange(); });
 analyzeNotesButton.addEventListener('click', async () => {
   if (!currentJobId) return;
   const stemName = noteStemSelect.value;
@@ -708,7 +810,7 @@ function renderLibrary() {
       if (!window.confirm(`Delete “${track.title || track.filename || 'this track'}” and its separated audio (${formatLibrarySize(track.storage_bytes)}) from the shared library? This cannot be undone.`)) return;
       remove.disabled = true;
       try { const res = await fetch(`/api/library/${encodeURIComponent(track.id)}`, {method:'DELETE'}); const result = await res.json(); if (!res.ok) throw new Error(result.detail || 'Delete failed.');
-        if (currentJobId === track.id) { audioPlayer.pause(); stopMetronome(); stopStemPlayers(); playerArea.hidden = true; mixerEmptyState.hidden = false; currentJobId = null; }
+        if (currentJobId === track.id) { audioPlayer.pause(); stopMetronome(); stopStemPlayers(); playerArea.hidden = true; mixerEmptyState.hidden = false; currentJobId = null; updateBrowserTitle(); }
         try { localStorage.removeItem(settingsKey(track.id)); } catch {}
         await loadLibrary();
       } catch (err) { libraryStatus.textContent = err.message; remove.disabled = false; }
@@ -732,6 +834,31 @@ function closeEditTrackDialog() {
 document.querySelector('#close-edit-track').addEventListener('click', closeEditTrackDialog);
 document.querySelector('#cancel-edit-track').addEventListener('click', closeEditTrackDialog);
 editTrackDialog.addEventListener('click', event => { if (event.target === editTrackDialog) closeEditTrackDialog(); });
+function updateLoadedTrackHeading(track) {
+  const title = track.title || (track.filename || 'Backing track').replace(/\.[^.]+$/, '');
+  document.querySelector('#result-filename').textContent = title;
+  const metadata = [];
+  if (track.artist) metadata.push(track.artist);
+  if (track.album) metadata.push(track.album);
+  if (track.bpm != null && track.bpm !== '') metadata.push(`${track.bpm} BPM`);
+  if (track.time_signature) metadata.push(track.time_signature);
+  const duration = Number(track.duration);
+  if (Number.isFinite(duration) && duration > 0) metadata.push(formatTime(duration));
+  if (!metadata.length) metadata.push('Mixed backing track');
+  document.querySelector('#result-metadata').textContent = metadata.join(' · ');
+  updateBrowserTitle();
+}
+
+function updateBrowserTitle(status = audioPlayer.paused ? 'Paused' : 'Playing') {
+  if (!currentJobId || playerArea.hidden) {
+    document.title = 'Jamloom — play your part';
+    return;
+  }
+  const title = document.querySelector('#result-filename').textContent || 'Backing track';
+  const icon = status === 'Playing' ? '▶' : status === 'Ended' ? '■' : '⏸';
+  document.title = `${icon} ${title} — ${status} | Jamloom`;
+}
+
 editTrackForm.addEventListener('submit', async event => {
   event.preventDefault();
   if (!editingLibraryTrack) return;
@@ -754,7 +881,7 @@ editTrackForm.addEventListener('submit', async event => {
     const trackId = editingLibraryTrack.id;
     closeEditTrackDialog();
     await loadLibrary();
-    if (currentJobId === trackId) document.querySelector('#result-filename').textContent = result.track.title || result.track.filename || 'Backing track';
+    if (currentJobId === trackId) updateLoadedTrackHeading(result.track);
   } catch (err) {
     editTrackStatus.textContent = err.message;
   } finally { saveButton.disabled = false; }
@@ -1289,6 +1416,7 @@ function resetLoop() {
   saveTrackSettings();
 }
 playbackSeek.addEventListener('input', () => { if (Number.isFinite(audioPlayer.duration)) audioPlayer.currentTime = Math.min(audioPlayer.duration, Number(playbackSeek.value) / 10); updateTimeDisplay(); });
+beginningButton.addEventListener('click', () => { audioPlayer.currentTime = 0; updateTimeDisplay(); updateCurrentNote(true); });
 rewindButton.addEventListener('click', () => { audioPlayer.currentTime = Math.max(0, (audioPlayer.currentTime || 0) - 5); });
 forwardButton.addEventListener('click', () => {
   const end = Number.isFinite(audioPlayer.duration) ? audioPlayer.duration : Infinity;
@@ -1307,6 +1435,10 @@ function startNotePlaybackUpdates() {
     try {
       updateTimeDisplay();
       updateCurrentNote();
+      if (noteAuditionEndTime !== null && audioPlayer.currentTime >= noteAuditionEndTime) {
+        noteAuditionEndTime = null;
+        audioPlayer.pause();
+      }
     } catch (error) {
       console.error('Playback UI update failed:', error);
     }
@@ -1324,14 +1456,24 @@ function stopNotePlaybackUpdates() {
   updateCurrentNote();
 }
 audioPlayer.addEventListener('play', () => {
+  stopNoteStemAudition();
+  requestScreenWakeLock();
   setNoteEditorVisible(false);
-  playToggleButton.textContent = 'Pause';
+  playToggleButton.textContent = '⏸';
+  playToggleButton.title = 'Pause';
+  playToggleButton.setAttribute('aria-label', 'Pause');
+  updateBrowserTitle('Playing');
   startMetronome();
   startNotePlaybackUpdates();
   if (mixerMode) playStemPlayers();
 });
 audioPlayer.addEventListener('pause', () => {
-  playToggleButton.textContent = 'Play';
+  noteAuditionEndTime = null;
+  releaseScreenWakeLock();
+  playToggleButton.textContent = '▶';
+  playToggleButton.title = 'Play';
+  playToggleButton.setAttribute('aria-label', 'Play');
+  updateBrowserTitle('Paused');
   stopMetronome();
   stopNotePlaybackUpdates();
   for (const player of stemPlayers.values()) player.audio.pause();
@@ -1349,10 +1491,13 @@ audioPlayer.addEventListener('timeupdate', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
+  if (!audioPlayer.paused && !audioPlayer.ended) requestScreenWakeLock();
   updateTimeDisplay(); updateCurrentNote(true);
   if (!audioPlayer.paused && !audioPlayer.ended) startNotePlaybackUpdates();
 });
-audioPlayer.addEventListener('ended', () => { stopMetronome(); stopNotePlaybackUpdates(); playToggleButton.textContent = 'Play'; });
+audioPlayer.addEventListener('ended', () => { releaseScreenWakeLock(); stopMetronome(); stopNotePlaybackUpdates(); updateBrowserTitle('Ended'); playToggleButton.textContent = '▶';
+  playToggleButton.title = 'Play';
+  playToggleButton.setAttribute('aria-label', 'Play'); });
 audioPlayer.addEventListener('loadedmetadata', updateTimeDisplay);
 audioPlayer.addEventListener('durationchange', updateTimeDisplay);
 audioPlayer.addEventListener('loadedmetadata', updateTimeDisplay);
@@ -1432,7 +1577,7 @@ function loadCompletedTrack(job, fromLibrary = false) {
   audioPlayer.pause(); stopMetronome(); stopStemPlayers();
   metronomeMuted = false; metronomeDownbeatOffset = 0; metronomeBpmInput = null; metronomeLevelInput = null; metronomeLevelValue = null; metronomeMuteButton = null; metronomeSoloButton = null;
   playerArea.hidden = false; mixerEmptyState.hidden = true; separatorPanel.hidden = true; jobProgress.hidden = true; currentJobId = job.id; setPracticeMode(practiceMode, false);
-  document.querySelector('#result-filename').textContent = job.title || (job.filename || 'Backing track').replace(/\.[^.]+$/, '');
+  updateLoadedTrackHeading(job);
   currentBackingUrl = job.backing_url; currentTrackDuration = Number(job.duration) || 0; clockKind = '';
   setClockSource(Object.keys(job.stems || {}).length > 0, true); audioPlayer.volume = masterGain(); audioPlayer.playbackRate = 1; speedSelect.value = '1';
   loopStart = null; loopEnd = null; loopEnabled = false; updateLoopUI(); updateTimeDisplay();
@@ -1494,7 +1639,7 @@ form.addEventListener('submit', async e => {
   e.preventDefault();
   if (!fileInput.files.length) return;
   if (pollTimer) clearInterval(pollTimer);
-  separatorPanel.hidden = false; errorBox.hidden = true; jobProgress.hidden = false; mixerEmptyState.hidden = false; playerArea.hidden = true; currentJobId = null;
+  separatorPanel.hidden = false; errorBox.hidden = true; jobProgress.hidden = false; mixerEmptyState.hidden = false; playerArea.hidden = true; currentJobId = null; updateBrowserTitle();
   audioPlayer.pause(); stopMetronome(); audioPlayer.muted = false; clockKind = ''; audioPlayer.removeAttribute('src'); audioPlayer.load();
   stopStemPlayers(); mixerMode = false; soloedStem = null; stemsList.hidden = false; stemsToggle.textContent = 'Use backing mix';
   jobMessage.textContent = 'Preparing your new track…'; progressBar.style.width = '3%';
