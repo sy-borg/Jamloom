@@ -79,4 +79,4 @@ Jamloom's own source code is licensed under the MIT License; see [LICENSE](LICEN
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 
-Latest release: **0.4.39** auditions exactly the selected note duration from its instrument stem while keeping the main player paused. See [CHANGELOG.md](CHANGELOG.md).
+Latest release: **0.4.43** removes the remaining legacy `STEMFORGE_` environment-variable fallbacks. It retains the saved, visual-only muted-string (`x`) marker from 0.4.42 and is based on 0.4.39, without the optional Basic Pitch experiment. See [CHANGELOG.md](CHANGELOG.md).

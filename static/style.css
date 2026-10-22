@@ -188,3 +188,5 @@ kbd{display:inline-block;padding:2px 5px;border:1px solid #3a4c5b;border-radius:
 .note-event-line{display:flex}
 
 .note-edit-groups{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}.note-edit-group{min-width:0;padding:9px;border:1px solid #223541;border-radius:9px}.note-edit-group-label{display:block;margin-bottom:2px;color:var(--muted);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.note-edit-group .note-editor-actions{margin-top:5px}.note-edit-group .note-editor-actions button{min-width:0}@media(max-width:620px){.note-edit-groups{grid-template-columns:1fr}}
+
+.muted-string-toggle{justify-content:flex-end}.muted-string-control{display:flex;align-items:center;gap:7px;min-height:38px;padding:0 9px;border:1px solid #2c3b49;border-radius:8px;background:#0b121a;color:var(--text);font-size:11px}.note-editor-fields .muted-string-control input[type="checkbox"]{width:16px;height:16px;margin:0;padding:0;border:0;background:transparent;box-sizing:content-box;accent-color:var(--cyan)}.muted-string-toggle:has(input:disabled){opacity:.5}

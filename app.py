@@ -21,14 +21,14 @@ from starlette.requests import Request
 from sessions import router as sessions_router
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("JAMLOOM_DATA", os.environ.get("STEMFORGE_DATA", BASE_DIR / "data"))).resolve()
+DATA_DIR = Path(os.environ.get("JAMLOOM_DATA", BASE_DIR / "data")).resolve()
 UPLOAD_DIR = DATA_DIR / "uploads"
 JOB_DIR = DATA_DIR / "jobs"
 LIBRARY_DIR = DATA_DIR / "library"
 for directory in (UPLOAD_DIR, JOB_DIR, LIBRARY_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
-MAX_UPLOAD_BYTES = int(os.environ.get("JAMLOOM_MAX_UPLOAD_BYTES", os.environ.get("STEMFORGE_MAX_UPLOAD_BYTES", 500 * 1024 * 1024)))
+MAX_UPLOAD_BYTES = int(os.environ.get("JAMLOOM_MAX_UPLOAD_BYTES", 500 * 1024 * 1024))
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus", ".aiff", ".aif", ".wma"}
 OPEN_STRING_MIDI = {
     "guitar": {1: 64, 2: 59, 3: 55, 4: 50, 5: 45, 6: 40},
@@ -39,7 +39,7 @@ MODELS = {
     "htdemucs_6s": {"vocals", "drums", "bass", "guitar", "piano", "other"},
 }
 
-app = FastAPI(title="Jamloom", version="0.4.11")
+app = FastAPI(title="Jamloom", version="0.4.43")
 app.include_router(sessions_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -610,6 +610,7 @@ async def save_note_arrangement(job_id: str, stem_name: str, payload: dict[str, 
             "frequency_hz": round(440.0 * (2.0 ** ((midi - 69) / 12.0)), 2),
             "confidence": float(event.get("confidence", 1.0)) if str(event.get("confidence", 1.0)).replace('.', '', 1).isdigit() else 1.0,
             "string": string_value, "fret": fret_value,
+            "muted_string": bool(event.get("muted_string", False)),
             "edited": True, "chord_tone": bool(event.get("chord_tone", False)),
         })
     normalized.sort(key=lambda event: (event["start"], event["end"]))

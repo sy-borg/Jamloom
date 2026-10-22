@@ -1,3 +1,9 @@
+## 0.4.43
+- Removed legacy `STEMFORGE_DATA` and `STEMFORGE_MAX_UPLOAD_BYTES` environment-variable fallbacks; Jamloom now uses only the corresponding `JAMLOOM_` variables.
+
+## 0.4.42
+- Added a visual-only muted-string toggle for guitar/bass note events. The tab displays `x`; pitch, frequency, and playback remain unchanged, and the marker is saved with the arrangement.
+
 ## 0.4.39
 - Note auditions now play exactly the selected note's recorded start-to-end duration, with no lead-in or tail margin and no minimum-length extension.
 

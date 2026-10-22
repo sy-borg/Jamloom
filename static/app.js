@@ -146,6 +146,7 @@ const editNoteStart = document.querySelector('#edit-note-start');
 const editNoteEnd = document.querySelector('#edit-note-end');
 const editNoteString = document.querySelector('#edit-note-string');
 const editNoteFret = document.querySelector('#edit-note-fret');
+const editNoteMuted = document.querySelector('#edit-note-muted');
 const applyNoteEditButton = document.querySelector('#apply-note-edit');
 const addNoteEventButton = document.querySelector('#add-note-event');
 const deleteNoteEventButton = document.querySelector('#delete-note-event');
@@ -297,7 +298,7 @@ function renderNoteEvents() {
         const positions = column.events.map(item => ({...item, position:getInstrumentPosition(item.event.midi, item.event.string, item.event.fret)})).filter(item => item.position?.string === stringInfo.n);
         if (positions.length) {
           const fret = document.createElement('span'); fret.className = 'guitar-tab-fret';
-          fret.textContent = positions.map(item => item.position.fret).join('/');
+          fret.textContent = positions.map(item => item.event.muted_string ? 'x' : item.position.fret).join('/');
           if (activeOnset !== null && column.onset === activeOnset) fret.classList.add('active-fret');
           cell.append(fret);
           cell.title = positions.map(item => `${item.event.note} · ${formatNoteTime(item.event.start)}`).join(', ');
@@ -318,7 +319,7 @@ function renderNoteEvents() {
       const note = document.createElement('strong'); note.textContent = event.note;
       const tabPosition = document.createElement('span'); tabPosition.className = 'note-event-tab';
       const tab = getInstrumentPosition(event.midi, event.string, event.fret);
-      tabPosition.textContent = tab ? `${tab.string}|${tab.fret}` : 'Tab —';
+      tabPosition.textContent = tab ? `${tab.string}|${event.muted_string ? 'x' : tab.fret}` : 'Tab —';
       noteLine.append(note, tabPosition);
       const detailLine = document.createElement('span'); detailLine.className = 'note-event-line note-event-line-details';
       const frequency = document.createElement('span'); frequency.className = 'note-event-frequency'; frequency.textContent = event.frequency_hz != null ? `${event.frequency_hz.toFixed(1)} Hz` : '— Hz';
@@ -415,7 +416,7 @@ function fillNoteEditor() {
   const event = currentPitchAnalysis?.events?.[selectedNoteEventIndex];
   const enabled = Boolean(event);
   editNotePitch.disabled = !enabled; editNoteStart.disabled = !enabled; editNoteEnd.disabled = !enabled;
-  editNoteString.disabled = !enabled; editNoteFret.disabled = !enabled;
+  editNoteString.disabled = !enabled; editNoteFret.disabled = !enabled; editNoteMuted.disabled = !enabled;
   applyNoteEditButton.disabled = !enabled; deleteNoteEventButton.disabled = !enabled;
   if (!event) return;
   editNotePitch.value = event.note || midiToNote(event.midi);
@@ -424,6 +425,7 @@ function fillNoteEditor() {
   const tab = getInstrumentPosition(event.midi, event.string, event.fret);
   editNoteString.value = tab ? String(tab.string) : '';
   editNoteFret.value = tab ? String(tab.fret) : '';
+  editNoteMuted.checked = Boolean(event.muted_string);
 }
 function markArrangementDraft(message = 'Unsaved changes. Save the arrangement to keep them with this track.') {
   arrangementDirty = true;
@@ -465,6 +467,13 @@ editNoteString.addEventListener('change', () => {
   updatePitchFromFretboardPosition();
 });
 editNoteFret.addEventListener('change', updatePitchFromFretboardPosition);
+editNoteMuted.addEventListener('change', () => {
+  const event = currentPitchAnalysis?.events?.[selectedNoteEventIndex];
+  if (!event) return;
+  event.muted_string = editNoteMuted.checked;
+  markArrangementDraft(event.muted_string ? 'Muted-string x marker added visually. Pitch and playback are unchanged; save the arrangement to keep it.' : 'Muted-string x marker removed. Pitch and playback are unchanged; save the arrangement to keep it.');
+  updateCurrentNote(true);
+});
 applyNoteEditButton.addEventListener('click', () => {
   const event = currentPitchAnalysis?.events?.[selectedNoteEventIndex];
   if (!event) return;
@@ -479,7 +488,7 @@ applyNoteEditButton.addEventListener('click', () => {
   if ((selectedString == null) !== (selectedFret == null) || (selectedString != null && (!Number.isInteger(selectedString) || !Number.isInteger(selectedFret) || selectedFret < 0 || selectedFret > 24 || (noteStemSelect.value === 'bass' ? BASS_OPEN_MIDI[selectedString] : GUITAR_OPEN_MIDI[selectedString]) + selectedFret !== midi))) {
     noteEditorStatus.textContent = 'Choose a string and fret that match the note pitch, or leave both unassigned.'; return;
   }
-  Object.assign(event, {midi, note: midiToNote(midi), start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, string: selectedString, fret: selectedFret, edited: true});
+  Object.assign(event, {midi, note: midiToNote(midi), muted_string: editNoteMuted.checked, start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, string: selectedString, fret: selectedFret, edited: true});
   currentPitchAnalysis.events.sort((a, b) => a.start - b.start);
   selectedNoteEventIndex = currentPitchAnalysis.events.indexOf(event);
   markArrangementDraft('Note updated. Save the arrangement to keep this change.');
@@ -493,7 +502,7 @@ addNoteEventButton.addEventListener('click', () => {
   if (end <= start) { noteEditorStatus.textContent = 'Move playback away from the end of the song to add a note.'; return; }
   const midi = parseNotePitch(editNotePitch.value) ?? 36;
   const position = getInstrumentPosition(midi);
-  const event = {start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, midi, note: midiToNote(midi), frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, confidence: 1, string: position?.string ?? null, fret: position?.fret ?? null, edited: true};
+  const event = {start: Math.round(start * 1000) / 1000, end: Math.round(end * 1000) / 1000, midi, note: midiToNote(midi), muted_string: false, frequency_hz: Math.round(noteFrequency(midi) * 100) / 100, confidence: 1, string: position?.string ?? null, fret: position?.fret ?? null, edited: true};
   currentPitchAnalysis.events.push(event); currentPitchAnalysis.events.sort((a, b) => a.start - b.start);
   selectedNoteEventIndex = currentPitchAnalysis.events.indexOf(event);
   markArrangementDraft('Note added. Adjust its pitch and timing, then save the arrangement.');
@@ -508,7 +517,7 @@ document.querySelector('#add-chord-tone').addEventListener('click', () => {
   if (end <= start) { noteEditorStatus.textContent = 'Move playback away from the end of the song to add a chord tone.'; return; }
   const midi = selected ? Math.min(96, Number(selected.midi) + 4) : (parseNotePitch(editNotePitch.value) ?? 48);
   const position = getInstrumentPosition(midi);
-  const event = {start:Math.round(start*1000)/1000, end:Math.round(end*1000)/1000, midi, note:midiToNote(midi), frequency_hz:Math.round(noteFrequency(midi)*100)/100, confidence:1, string:position?.string ?? null, fret:position?.fret ?? null, edited:true, chord_tone:true};
+  const event = {start:Math.round(start*1000)/1000, end:Math.round(end*1000)/1000, midi, note:midiToNote(midi), muted_string:false, frequency_hz:Math.round(noteFrequency(midi)*100)/100, confidence:1, string:position?.string ?? null, fret:position?.fret ?? null, edited:true, chord_tone:true};
   currentPitchAnalysis.events.push(event); currentPitchAnalysis.events.sort((a,b)=>a.start-b.start);
   selectedNoteEventIndex=currentPitchAnalysis.events.indexOf(event);
   markArrangementDraft('Chord tone added at the selected note’s timing. Set its pitch/string/fret, then save.');
