@@ -1,3 +1,7 @@
+## 0.4.44
+- Added a CPU-focused Dockerfile with FFmpeg, CPU-only PyTorch, Demucs, and Jamloom dependencies. Library data and model weights can persist in mounted volumes.
+- Documented image build, run, persistence, and local-network access in the README.
+
 ## 0.4.43
 - Removed legacy `STEMFORGE_DATA` and `STEMFORGE_MAX_UPLOAD_BYTES` environment-variable fallbacks; Jamloom now uses only the corresponding `JAMLOOM_` variables.
 

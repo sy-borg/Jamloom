@@ -56,6 +56,31 @@ Open <http://127.0.0.1:8000> in your browser. The first separation may download 
 
 To access Jamloom from another device on your local network, bind Uvicorn to a suitable LAN interface, for example `--host 0.0.0.0`, and configure your firewall accordingly. Do not expose this prototype directly to the public internet.
 
+## Run with Docker
+
+The included Dockerfile builds a CPU-focused image with Jamloom, FFmpeg, PyTorch, and Demucs. GPU acceleration is not configured in this image; audio separation runs on the CPU. The first separation downloads Demucs model weights, so allow time and disk space for that initial run.
+
+From the project directory, build the image:
+
+```bash
+docker build -t jamloom:latest .
+```
+
+Then run it, keeping the library and downloaded model weights in persistent storage:
+
+```bash
+docker volume create jamloom-models
+docker run --name jamloom --restart unless-stopped \
+  -p 127.0.0.1:8000:8000 \
+  -v "$(pwd)/data:/data" \
+  -v jamloom-models:/models \
+  jamloom:latest
+```
+
+Open <http://127.0.0.1:8000>. The bind mount stores your Jamloom library in the current directory's `data/` folder; the named volume retains Demucs model weights between container recreations. Back up `data/` to preserve your tracks. To stop the container, run `docker stop jamloom`; to start it again, run `docker start jamloom`.
+
+The example binds only to the local machine. To access Jamloom from other devices, change the port mapping to `-p 8000:8000` and configure your network firewall deliberately. Jamloom does not have user accounts or production-grade access controls, so do not expose it directly to the public internet.
+
 ## Data and settings
 
 - The shared library is stored in `data/library/` (or `$JAMLOOM_DATA/library/`). It contains original uploads, generated mixes, stems, metadata, note analysis, and saved arrangements.
@@ -79,4 +104,4 @@ Jamloom's own source code is licensed under the MIT License; see [LICENSE](LICEN
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 
-Latest release: **0.4.43** removes the remaining legacy `STEMFORGE_` environment-variable fallbacks. It retains the saved, visual-only muted-string (`x`) marker from 0.4.42 and is based on 0.4.39, without the optional Basic Pitch experiment. See [CHANGELOG.md](CHANGELOG.md).
+Latest release: **0.4.44** adds a CPU-focused Dockerfile and Docker run instructions. It retains the visual-only muted-string (`x`) marker and removes the remaining legacy `STEMFORGE_` environment-variable fallbacks. See [CHANGELOG.md](CHANGELOG.md).
