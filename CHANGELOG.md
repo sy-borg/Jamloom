@@ -1,3 +1,10 @@
+## 0.4.46
+- Documented how to set host directory ownership for the non-root Docker user, and how to use a Docker-managed library volume instead.
+
+## 0.4.45
+- Updated the Dockerfile to run Jamloom as a non-root `appuser`, with `/data` and `/models` prepared for persistent storage.
+- Updated Docker setup documentation and release version.
+
 ## 0.4.44
 - Added a CPU-focused Dockerfile with FFmpeg, CPU-only PyTorch, Demucs, and Jamloom dependencies. Library data and model weights can persist in mounted volumes.
 - Documented image build, run, persistence, and local-network access in the README.

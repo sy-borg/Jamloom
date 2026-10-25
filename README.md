@@ -66,9 +66,15 @@ From the project directory, build the image:
 docker build -t jamloom:latest .
 ```
 
-Then run it, keeping the library and downloaded model weights in persistent storage:
+Then prepare a writable host directory for the library and run it, keeping the library and downloaded model weights in persistent storage:
 
 ```bash
+mkdir -p data
+# Find the UID and GID used by appuser inside the image:
+docker run --rm --entrypoint id jamloom:latest appuser
+# Use the UID:GID from that output in the next command (example: 1000:1000):
+sudo chown -R 1000:1000 data
+
 docker volume create jamloom-models
 docker run --name jamloom --restart unless-stopped \
   -p 127.0.0.1:8000:8000 \
@@ -76,6 +82,8 @@ docker run --name jamloom --restart unless-stopped \
   -v jamloom-models:/models \
   jamloom:latest
 ```
+
+**Permissions:** the container runs as the unprivileged `appuser`, so the host `data/` directory must be writable by its UID/GID. The `1000:1000` above is only an example—use the values shown by the `id` command. If you prefer not to manage host-directory ownership, use a Docker-managed volume for `/data` instead of the bind mount, for example `-v jamloom-data:/data` (create it with `docker volume create jamloom-data`). A named volume is also persistent; back it up before removing or replacing it.
 
 Open <http://127.0.0.1:8000>. The bind mount stores your Jamloom library in the current directory's `data/` folder; the named volume retains Demucs model weights between container recreations. Back up `data/` to preserve your tracks. To stop the container, run `docker stop jamloom`; to start it again, run `docker start jamloom`.
 
@@ -104,4 +112,4 @@ Jamloom's own source code is licensed under the MIT License; see [LICENSE](LICEN
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 
-Latest release: **0.4.44** adds a CPU-focused Dockerfile and Docker run instructions. It retains the visual-only muted-string (`x`) marker and removes the remaining legacy `STEMFORGE_` environment-variable fallbacks. See [CHANGELOG.md](CHANGELOG.md).
+Latest release: **0.4.46** documents how to grant the container user write access to the host `data/` directory, with a Docker-managed volume alternative. It retains the CPU-focused image, non-root container user, and visual-only muted-string (`x`) marker. See [CHANGELOG.md](CHANGELOG.md).
