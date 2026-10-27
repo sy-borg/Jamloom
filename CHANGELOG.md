@@ -1,3 +1,9 @@
+## 0.4.47
+- Improved pitch/note estimation timing accuracy to provide sample-accurate note timing for musical applications
+- Enhanced note timing precision by implementing improved frame position tracking for more precise timing
+- Added adaptive minimum duration thresholds based on instrument type (bass vs others) for more accurate note detection
+- Implemented silence merging between notes by distributing half of silence periods to adjacent notes for better timing accuracy
+
 ## 0.4.46
 - Documented how to set host directory ownership for the non-root Docker user, and how to use a Docker-managed library volume instead.
 
