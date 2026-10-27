@@ -1,8 +1,10 @@
 ## 0.4.47
-- Improved pitch/note estimation timing accuracy to provide sample-accurate note timing for musical applications
-- Enhanced note timing precision by implementing improved frame position tracking for more precise timing
-- Added adaptive minimum duration thresholds based on instrument type (bass vs others) for more accurate note detection
-- Implemented silence merging between notes by distributing half of silence periods to adjacent notes for better timing accuracy
+- Reworked note detection for separated instrument stems: notes are now segmented from detected attacks in the audio envelope and labelled from the pitch track, instead of being guessed from pitch-frame boundaries.
+- Replaced the autocorrelation peak picker with a YIN estimator. The old picker locked onto the zero-lag lobe and reported ~1297 Hz on real bass stems in about a third of frames; such false notes are gone.
+- Note attacks are refined to individual audio samples, so detected starts now land within a few milliseconds of the played attack.
+- Fixed repeated notes on the same pitch being merged into one when silence separated them, and fixed the first note being moved to the start of the file and the last note being stretched over trailing silence.
+- Notes are held up to the midpoint of the following silence (capped at 0.25 s) so the tablature no longer goes blank between phrases, without moving the next note's attack earlier.
+- Added `tests/test_note_detection.py` covering attack timing, repeated pitches, short notes, and trailing silence.
 
 ## 0.4.46
 - Documented how to set host directory ownership for the non-root Docker user, and how to use a Docker-managed library volume instead.

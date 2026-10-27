@@ -39,7 +39,7 @@ MODELS = {
     "htdemucs_6s": {"vocals", "drums", "bass", "guitar", "piano", "other"},
 }
 
-app = FastAPI(title="Jamloom", version="0.4.46")
+app = FastAPI(title="Jamloom", version="0.4.47")
 app.include_router(sessions_router)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -73,6 +73,256 @@ def public_track(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+ENVELOPE_HOP = 64
+
+
+def _rms_envelope(audio, hop: int):
+    """Root-mean-square energy per hop, used for onset and offset detection."""
+    import numpy as np
+    padded = np.pad(audio, (0, (-len(audio)) % hop))
+    blocks = padded.reshape(-1, hop)
+    return np.sqrt(np.mean(blocks * blocks, axis=1))
+
+
+def _smooth_values(values, width: int):
+    import numpy as np
+    if width <= 1 or values.size == 0:
+        return values
+    kernel = np.ones(width, dtype=np.float32) / float(width)
+    return np.convolve(values, kernel, mode="same")
+
+
+def _rolling_maximum(values, radius: int):
+    import numpy as np
+    if radius <= 0 or values.size == 0:
+        return values
+    padded = np.pad(values, radius, mode="edge")
+    return np.lib.stride_tricks.sliding_window_view(padded, 2 * radius + 1).max(axis=1)
+
+
+def _trailing_minimum(values, width: int):
+    import numpy as np
+    if width <= 0 or values.size == 0:
+        return values
+    padded = np.pad(values, (width, 0), mode="edge")
+    return np.lib.stride_tricks.sliding_window_view(padded, width + 1).min(axis=1)
+
+
+def _yin_pitch(frame, sample_rate: float, min_hz: float, max_hz: float, threshold: float = 0.15):
+    """Estimate a fundamental with YIN's cumulative-mean normalised difference.
+
+    The plain autocorrelation maximum latches onto the decaying flank of the
+    zero-lag lobe (a strong low note reads as ~1.2 kHz), so pitch is taken from
+    the first dip of the normalised difference instead.
+    """
+    import numpy as np
+    size = int(frame.size)
+    min_lag = max(2, int(sample_rate / max_hz))
+    max_lag = min(size - 2, int(sample_rate / min_hz))
+    if max_lag <= min_lag:
+        return None, 0.0
+    samples = frame.astype(np.float64, copy=False)
+    energy = np.concatenate(([0.0], np.cumsum(samples * samples)))
+    fft_size = 1 << (2 * size - 1).bit_length()
+    spectrum = np.fft.rfft(samples, n=fft_size)
+    autocorr = np.fft.irfft(spectrum * np.conjugate(spectrum), n=fft_size)
+    lags = np.arange(1, max_lag + 2)
+    difference = energy[size - lags] + (energy[size] - energy[lags]) - 2.0 * autocorr[1:max_lag + 2]
+    difference = np.maximum(difference, 0.0)
+    cumulative = np.cumsum(difference)
+    normalised = np.ones(max_lag + 2)
+    spans = np.arange(2, max_lag + 2)
+    normalised[2:max_lag + 2] = difference[spans - 1] * spans / np.maximum(cumulative[spans - 1], 1e-12)
+    tail = normalised[min_lag:max_lag + 1]
+    dips = np.flatnonzero(tail < threshold)
+    lag = min_lag + int(dips[0]) if dips.size else min_lag + int(np.argmin(tail))
+    while lag < max_lag and normalised[lag + 1] < normalised[lag]:
+        lag += 1
+    left, centre, right = normalised[lag - 1], normalised[lag], normalised[lag + 1]
+    denominator = left - 2.0 * centre + right
+    shift = 0.5 * (left - right) / denominator if abs(denominator) > 1e-12 else 0.0
+    frequency = sample_rate / (lag + float(np.clip(shift, -0.5, 0.5)))
+    return frequency, 1.0 - float(centre)
+
+
+def _refine_onset_sample(audio, envelope, hop: int, index: int, gate: float) -> int:
+    """Turn a coarse energy-peak hop into the sample where the attack starts."""
+    peak = float(envelope[max(0, index - 1):index + 3].max())
+    level = max(gate, peak * 0.25)
+    start = index
+    limit = max(0, index - 10)
+    while start > limit and envelope[start - 1] >= level:
+        start -= 1
+    block_start = start * hop
+    block_end = min(len(audio), block_start + hop * 4)
+    for sample in range(block_start, block_end):
+        if abs(float(audio[sample])) >= level:
+            return sample
+    return block_start
+
+
+def _detect_note_onsets(audio, sample_rate: float, hop: int = ENVELOPE_HOP):
+    """Find attack positions from the energy envelope, refined to sample level."""
+    import numpy as np
+    envelope = _smooth_values(_rms_envelope(audio, hop), 2)
+    if envelope.size == 0:
+        return envelope, 0.0, []
+    quiet = float(np.percentile(envelope, 15))
+    gate = float(np.clip(quiet * 3.0, 0.0015, 0.012))
+    # Measure each rise against the quietest point of the last ~60 ms so slow
+    # strums count as attacks, then require a sizeable fraction of the local
+    # level so RMS ripple and reverb swells do not.
+    lookback = max(1, int(round(0.06 * sample_rate / hop)))
+    rise = envelope - _trailing_minimum(envelope, lookback)
+    radius = max(1, int(round(0.25 * sample_rate / hop)))
+    local_level = _rolling_maximum(envelope, radius)
+    active = envelope > gate
+    previous = np.concatenate(([False], active[:-1]))
+    crossings = np.flatnonzero(active & ~previous)
+    threshold = np.maximum(gate * 0.5, local_level * ONSET_LEVEL_FRACTION)
+    is_peak = rise >= _rolling_maximum(rise, 3) - 1e-12
+    peaks = np.flatnonzero(is_peak & (rise >= threshold) & (rise > 0.0) & active)
+    # A gate crossing is the attack itself; ignore the energy peak that follows
+    # it, otherwise one plucked note is split into several.
+    same_attack = max(1, int(round(0.2 * sample_rate / hop)))
+    if crossings.size:
+        peaks = np.array([int(peak) for peak in peaks
+                          if not np.any((crossings <= peak) & (crossings >= peak - same_attack))],
+                         dtype=int)
+    candidates = np.union1d(crossings, peaks)
+    min_gap = max(1, int(round(0.055 * sample_rate / hop)))
+    onsets: list[int] = []
+    last_index = -min_gap
+    for index in candidates:
+        index = int(index)
+        if index - last_index < min_gap:
+            continue
+        last_index = index
+        onsets.append(_refine_onset_sample(audio, envelope, hop, index, gate))
+    return envelope, gate, onsets
+
+
+def _pitch_runs(items, hop_size: int):
+    """Group consecutive frames of the same pitch, dropping one-frame flickers."""
+    runs: list[dict[str, Any]] = []
+    for frame, centre in items:
+        joined = runs and runs[-1]["midi"] == frame["midi"] and centre - runs[-1]["last"] <= hop_size * 2
+        if joined:
+            runs[-1]["frames"].append(frame)
+            runs[-1]["last"] = centre
+        else:
+            runs.append({"midi": frame["midi"], "frames": [frame], "first": centre, "last": centre})
+    if len(runs) > 1:
+        longest = max(runs, key=lambda run: len(run["frames"]))
+        runs = [run for run in runs if len(run["frames"]) > 1 or run is longest]
+
+    def mean_confidence(run) -> float:
+        return sum(float(frame["confidence"]) for frame in run["frames"]) / len(run["frames"])
+    # Frames whose window straddles a note change can lock onto a pitch that
+    # belongs to neither note. Drop such short, low-confidence runs when a
+    # stronger run covers the same attack segment.
+    filtered = []
+    for run in runs:
+        weak = (
+            len(run["frames"]) <= 3
+            and mean_confidence(run) < 0.8
+            and any(len(other["frames"]) > len(run["frames"]) and mean_confidence(other) > 0.9
+                    for other in runs if other is not run)
+        )
+        if not weak:
+            filtered.append(run)
+    return filtered or runs
+
+
+def _summarise_run(run, start: int, end: int, envelope, hop: int, gate: float, sample_rate: float):
+    """Reduce one pitch run to a note event with an audible end."""
+    import numpy as np
+    weights: dict[int, float] = {}
+    for frame in run["frames"]:
+        weights[frame["midi"]] = weights.get(frame["midi"], 0.0) + max(float(frame["confidence"]), 1e-3)
+    midi = max(weights, key=weights.get)
+    matching = [frame for frame in run["frames"] if frame["midi"] == midi]
+    frequencies = [frame["frequency_hz"] for frame in matching if frame["frequency_hz"]]
+    confidence = sum(float(frame["confidence"]) for frame in matching) / len(matching)
+    first_hop = max(0, start // hop)
+    last_hop = min(envelope.size, max(first_hop + 1, int(np.ceil(end / hop))))
+    if last_hop > first_hop:
+        peak = float(envelope[first_hop:last_hop].max())
+        level = max(gate, peak * 0.08)
+        quiet = envelope[first_hop:last_hop] < level
+        pairs = np.concatenate(([False], quiet[:-1] & quiet[1:]))
+        release = np.flatnonzero(pairs)
+        if release.size:
+            end = min(end, (first_hop + int(release[0])) * hop)
+    return {
+        "start": start / sample_rate,
+        "end": end / sample_rate,
+        "midi": int(midi),
+        "frequency_hz": float(np.median(frequencies)) if frequencies else None,
+        "confidence": confidence,
+    }
+
+
+MAX_NOTE_HOLD_SECONDS = 0.25
+ONSET_LEVEL_FRACTION = 0.35
+
+
+def _build_note_events(frames, audio, sample_rate: float, hop_size: int, window_size: int, stem_name: str):
+    """Turn a pitch track into note events, segmented by detected attacks."""
+    import numpy as np
+    if not frames:
+        return []
+    duration_samples = len(audio)
+    envelope, gate, onsets = _detect_note_onsets(audio, sample_rate)
+    voiced = [(frame, int(frame["center_sample"])) for frame in frames if frame["midi"] is not None]
+    if not voiced:
+        return []
+    boundaries = sorted({int(onset) for onset in onsets if 0 <= onset < duration_samples})
+    if not boundaries:
+        # No attack was found; fall back to the first frame that saw a pitch.
+        boundaries = [max(0, voiced[0][1] - window_size // 2)]
+    boundaries.append(duration_samples)
+    min_duration = 0.05 if stem_name == "bass" else 0.09
+    events: list[dict[str, Any]] = []
+    for start, end in zip(boundaries, boundaries[1:]):
+        if end <= start:
+            continue
+        # Frames centred within one hop of a boundary are dominated by the
+        # neighbouring note, so keep them out of this segment.
+        items = [(frame, centre) for frame, centre in voiced
+                 if start + hop_size <= centre < end - hop_size]
+        if not items:
+            items = [(frame, centre) for frame, centre in voiced if start <= centre < end]
+        if not items:
+            items = [(frame, centre) for frame, centre in voiced
+                     if start - hop_size <= centre < end + hop_size]
+        if not items:
+            continue
+        runs = _pitch_runs(items, hop_size)
+        cursor = start
+        for index, run in enumerate(runs):
+            if index == len(runs) - 1:
+                piece_end = end
+            else:
+                piece_end = (run["last"] + runs[index + 1]["first"]) // 2
+            piece_end = max(cursor + 1, min(end, piece_end))
+            events.append(_summarise_run(run, cursor, piece_end, envelope, ENVELOPE_HOP, gate, sample_rate))
+            cursor = piece_end
+    events = [event for event in events if event["end"] - event["start"] >= min_duration]
+    events.sort(key=lambda event: event["start"])
+    for previous, following in zip(events, events[1:]):
+        if previous["end"] < following["start"]:
+            # Hold each note halfway into the following silence so the tablature
+            # does not go blank between phrases, without moving the attack of the
+            # next note earlier than it was played. The hold is capped so a long
+            # rest does not become part of the note when it is auditioned.
+            hold = min((following["start"] - previous["end"]) / 2.0, MAX_NOTE_HOLD_SECONDS)
+            previous["end"] += hold
+        elif previous["end"] > following["start"]:
+            previous["end"] = following["start"]
+    return events
+
+
 def analyze_pitch_track(audio_path: Path, stem_name: str) -> dict[str, Any]:
     """Lightweight monophonic pitch estimate from a separated instrument stem."""
     import numpy as np
@@ -93,75 +343,58 @@ def analyze_pitch_track(audio_path: Path, stem_name: str) -> dict[str, Any]:
     max_samples = int(sample_rate * 15 * 60)
     truncated = len(audio) > max_samples
     audio = audio[:max_samples]
-    window_size = 4096
-    hop_size = 1102  # about 100 ms at 11 kHz
+    window_size = 2048
+    hop_size = 512
     if len(audio) < window_size:
         raise ValueError("The audio stem is too short to analyze.")
-    window = np.hanning(window_size).astype(np.float32)
     fft_size = 1 << (2 * window_size - 1).bit_length()
+    window = np.hanning(window_size).astype(np.float32)
     min_hz = 35.0 if stem_name == "bass" else 55.0
     max_hz = 1200.0
-    min_lag = max(2, int(sample_rate / max_hz))
-    max_lag = min(window_size - 2, int(sample_rate / min_hz))
     note_names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"]
+
     frames: list[dict[str, Any]] = []
-    
-    # Store frame positions for more accurate timing
-    frame_positions = []
-    
     for start in range(0, len(audio) - window_size + 1, hop_size):
-        frame_positions.append(start)
         frame = audio[start:start + window_size].astype(np.float32, copy=False)
         frame = frame - float(frame.mean())
+        centre = start + window_size // 2
         rms = float(np.sqrt(np.mean(frame * frame)))
         if rms < 0.003:
-            frames.append({"time": start / sample_rate, "midi": None, "frequency_hz": None, "confidence": 0.0, "sample_pos": start})
+            frames.append({"center_sample": centre,
+                           "midi": None, "frequency_hz": None, "confidence": 0.0})
             continue
-        weighted = frame * window
-        spectrum = np.fft.rfft(weighted, n=fft_size)
-        autocorr = np.fft.irfft(spectrum * np.conjugate(spectrum), n=fft_size)[:window_size]
-        # Normalize for the shrinking overlap at larger lags.
-        overlap = np.arange(window_size, 0, -1, dtype=np.float32)
-        autocorr = autocorr / overlap
-        if autocorr[0] <= 0:
-            frames.append({"time": start / sample_rate, "midi": None, "frequency_hz": None, "confidence": 0.0, "sample_pos": start})
+        frequency, confidence = _yin_pitch(frame, float(sample_rate), min_hz, max_hz)
+        if frequency is None:
+            frames.append({"center_sample": centre,
+                           "midi": None, "frequency_hz": None, "confidence": 0.0})
             continue
-        normalized = autocorr / autocorr[0]
-        section = normalized[min_lag:max_lag + 1]
-        lag_index = int(np.argmax(section)) + min_lag
-        # Parabolic interpolation makes pitch estimates less dependent on integer sample lag.
-        if 1 <= lag_index < window_size - 1:
-            left, center, right = normalized[lag_index - 1:lag_index + 2]
-            denom = left - 2 * center + right
-            shift = 0.5 * (left - right) / denom if abs(denom) > 1e-9 else 0.0
-        else:
-            shift = 0.0
-        frequency = sample_rate / (lag_index + float(np.clip(shift, -0.5, 0.5)))
-        # Autocorrelation can lock onto a subharmonic when a bass note's fundamental
-        # is weak. If the candidate is low and the spectrum strongly favors its octave,
-        # correct it upward. Compare local spectral peaks to tolerate FFT-bin mismatch.
+        # A strong second harmonic can win over a weak fundamental on bass, so
+        # compare local spectral peaks and lift the estimate by an octave when
+        # the spectrum clearly favours it.
+        spectrum = np.fft.rfft(frame * window, n=fft_size)
         magnitude = np.abs(spectrum)
         bin_hz = sample_rate / fft_size
+
         def local_peak(hz: float) -> float:
-            center_bin = int(round(hz / bin_hz))
-            lo = max(1, center_bin - 1)
-            hi = min(len(magnitude), center_bin + 2)
+            centre_bin = int(round(hz / bin_hz))
+            lo = max(1, centre_bin - 1)
+            hi = min(len(magnitude), centre_bin + 2)
             return float(np.max(magnitude[lo:hi])) if lo < hi else 0.0
+
         fundamental_peak = local_peak(frequency)
         octave_peak = local_peak(frequency * 2.0)
         octave_limit = 90.0 if stem_name == "bass" else 120.0
         if frequency < octave_limit and octave_peak > fundamental_peak * 1.65:
             frequency *= 2.0
-        confidence = float(np.clip(normalized[lag_index], 0.0, 1.0))
-        midi = int(round(69 + 12 * np.log2(frequency / 440.0))) if frequency > 0 else None
-        if confidence < 0.55 or midi is None or midi < 24 or midi > 88:
+            confidence *= 0.75
+        midi = int(round(69 + 12 * np.log2(frequency / 440.0)))
+        if confidence < 0.55 or midi < 24 or midi > 88:
             midi = None
-        frames.append({"time": round(start / sample_rate, 3), "midi": midi,
+        frames.append({"center_sample": centre, "midi": midi,
                        "frequency_hz": round(float(frequency), 2) if midi is not None else None,
-                       "confidence": round(confidence, 3), "sample_pos": start})
+                       "confidence": round(confidence, 3)})
 
-    # Correct isolated octave flips when both neighboring frames agree. This is
-    # deliberately conservative: sustained changes in the actual melody remain intact.
+    # Correct isolated octave flips when both neighbouring frames agree.
     for i in range(1, len(frames) - 1):
         prev_midi, midi, next_midi = frames[i - 1]["midi"], frames[i]["midi"], frames[i + 1]["midi"]
         if prev_midi is not None and next_midi is not None and midi is not None:
@@ -169,104 +402,16 @@ def analyze_pitch_track(audio_path: Path, stem_name: str) -> dict[str, Any]:
                 frames[i]["midi"] = prev_midi
                 frames[i]["frequency_hz"] = frames[i - 1]["frequency_hz"]
 
-    # Improve timing accuracy by using interpolated note boundaries
-    events: list[dict[str, Any]] = []
-    frame_seconds = hop_size / sample_rate
-    
-    # Use adaptive minimum duration based on instrument type
-    min_duration = 0.05 if stem_name == "bass" else 0.09
-    
-    # Track consecutive frames with the same pitch for better merging
-    for i, frame in enumerate(frames):
-        midi = frame["midi"]
-        if midi is None:
-            # Handle silence frames
-            if events and events[-1]["midi"] is None:
-                events[-1]["end"] = frame["time"]
-            continue
-            
-        # Check if this frame continues the previous note
-        if events and events[-1]["midi"] == midi:
-            # Continue the existing event with updated data
-            events[-1]["end"] = frame["time"]
-            events[-1]["confidence"] = (events[-1]["confidence"] + frame["confidence"]) / 2
-            if frame.get("frequency_hz") is not None:
-                previous_hz = events[-1].get("frequency_hz", frame["frequency_hz"])
-                events[-1]["frequency_hz"] = (previous_hz + frame["frequency_hz"]) / 2
-        else:
-            # Start a new event with more precise timing
-            events.append({
-                "start": frame["time"], 
-                "end": frame["time"] + frame_seconds,  # Initial end time
-                "midi": midi,
-                "frequency_hz": frame.get("frequency_hz"), 
-                "confidence": frame["confidence"]
-            })
-    
-    # Refine note boundaries using peak detection and interpolation
-    for i in range(len(events)):
-        if i == 0 and len(events) > 1:
-            # For first event, extend start to earlier if possible
-            events[i]["start"] = max(0, events[i]["start"] - frame_seconds)
-        elif i == len(events) - 1:
-            # For last event, extend end to later
-            if frames and len(frames) > 0:
-                events[i]["end"] = round(len(audio) / sample_rate, 3)
-        
-        # Filter out very short notes (but make it adaptive)
-        if events[i]["end"] - events[i]["start"] < min_duration:
-            events[i]["midi"] = None  # Mark as invalid
-    
-    # Remove invalid events (silence or very short notes)
-    events = [event for event in events if event["midi"] is not None and event["end"] - event["start"] >= min_duration]
-    
-    # Apply enhancement: merge silence periods between notes
-    # This ensures that when there's silence between notes, the silence is distributed
-    # evenly between adjacent notes
-    if len(events) > 1:
-        for i in range(len(events) - 1):
-            current_event = events[i]
-            next_event = events[i + 1]
-            
-            # If there is silence between current and next note
-            if current_event["end"] < next_event["start"]:
-                # Calculate the silence duration
-                silence_duration = next_event["start"] - current_event["end"]
-                
-                # Distribute half of the silence to each note
-                silence_to_add = silence_duration / 2.0
-                
-                # Extend the current note by half the silence duration
-                current_event["end"] = round(current_event["end"] + silence_to_add, 3)
-                
-                # Contract the next note by half the silence duration
-                next_event["start"] = round(next_event["start"] - silence_to_add, 3)
-    
-    # Refine event timing using more accurate sample position tracking
-    # Use sample-accurate note boundaries based on frame data
-    for i, event in enumerate(events):
-        # Find the sample positions that define this event's boundaries
-        if i == 0:
-            # First event - start from beginning of first frame
-            event["start"] = round(frames[0]["sample_pos"] / sample_rate, 3)
-        else:
-            # For subsequent events, use the start time of the frame
-            # This approach ensures better alignment with actual audio
-            # We'll also refine the end time using frame boundaries
-            pass
-            
-        if i == len(events) - 1 and frames:
-            # Last event - use final sample position
-            event["end"] = round(len(audio) / sample_rate, 3)
-    
-    # Apply note name conversion
+    events = _build_note_events(frames, audio, float(sample_rate), hop_size, window_size, stem_name)
     for event in events:
-        midi = event["midi"]
-        event["note"] = f"{note_names[midi % 12]}{midi // 12 - 1}"
-        
-    return {"stem": stem_name, "sample_rate": int(sample_rate), "duration": round(len(audio) / sample_rate, 3), "truncated": truncated, "events": events}
-
-
+        event["start"] = round(event["start"], 3)
+        event["end"] = round(event["end"], 3)
+        event["confidence"] = round(event["confidence"], 3)
+        if event["frequency_hz"] is not None:
+            event["frequency_hz"] = round(event["frequency_hz"], 2)
+        event["note"] = f"{note_names[event['midi'] % 12]}{event['midi'] // 12 - 1}"
+    return {"stem": stem_name, "sample_rate": int(sample_rate), "duration": round(len(audio) / sample_rate, 3),
+            "truncated": truncated, "events": events}
 
 def note_status_path(track_id: str) -> Path:
     return track_dir(track_id) / "note-analysis-status.json"
