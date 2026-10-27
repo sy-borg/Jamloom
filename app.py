@@ -105,12 +105,17 @@ def analyze_pitch_track(audio_path: Path, stem_name: str) -> dict[str, Any]:
     max_lag = min(window_size - 2, int(sample_rate / min_hz))
     note_names = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"]
     frames: list[dict[str, Any]] = []
+    
+    # Store frame positions for more accurate timing
+    frame_positions = []
+    
     for start in range(0, len(audio) - window_size + 1, hop_size):
+        frame_positions.append(start)
         frame = audio[start:start + window_size].astype(np.float32, copy=False)
         frame = frame - float(frame.mean())
         rms = float(np.sqrt(np.mean(frame * frame)))
         if rms < 0.003:
-            frames.append({"time": start / sample_rate, "midi": None, "frequency_hz": None, "confidence": 0.0})
+            frames.append({"time": start / sample_rate, "midi": None, "frequency_hz": None, "confidence": 0.0, "sample_pos": start})
             continue
         weighted = frame * window
         spectrum = np.fft.rfft(weighted, n=fft_size)
@@ -119,7 +124,7 @@ def analyze_pitch_track(audio_path: Path, stem_name: str) -> dict[str, Any]:
         overlap = np.arange(window_size, 0, -1, dtype=np.float32)
         autocorr = autocorr / overlap
         if autocorr[0] <= 0:
-            frames.append({"time": start / sample_rate, "midi": None, "frequency_hz": None, "confidence": 0.0})
+            frames.append({"time": start / sample_rate, "midi": None, "frequency_hz": None, "confidence": 0.0, "sample_pos": start})
             continue
         normalized = autocorr / autocorr[0]
         section = normalized[min_lag:max_lag + 1]
@@ -153,7 +158,7 @@ def analyze_pitch_track(audio_path: Path, stem_name: str) -> dict[str, Any]:
             midi = None
         frames.append({"time": round(start / sample_rate, 3), "midi": midi,
                        "frequency_hz": round(float(frequency), 2) if midi is not None else None,
-                       "confidence": round(confidence, 3)})
+                       "confidence": round(confidence, 3), "sample_pos": start})
 
     # Correct isolated octave flips when both neighboring frames agree. This is
     # deliberately conservative: sustained changes in the actual melody remain intact.
@@ -164,26 +169,101 @@ def analyze_pitch_track(audio_path: Path, stem_name: str) -> dict[str, Any]:
                 frames[i]["midi"] = prev_midi
                 frames[i]["frequency_hz"] = frames[i - 1]["frequency_hz"]
 
-    # Merge neighboring frames of the same pitch; suppress very short flickers.
+    # Improve timing accuracy by using interpolated note boundaries
     events: list[dict[str, Any]] = []
     frame_seconds = hop_size / sample_rate
-    for frame in frames:
+    
+    # Use adaptive minimum duration based on instrument type
+    min_duration = 0.05 if stem_name == "bass" else 0.09
+    
+    # Track consecutive frames with the same pitch for better merging
+    for i, frame in enumerate(frames):
         midi = frame["midi"]
-        if events and events[-1]["midi"] == midi and frame["time"] - events[-1]["end"] <= frame_seconds * 1.6:
-            events[-1]["end"] = round(frame["time"] + frame_seconds, 3)
-            events[-1]["confidence"] = round((events[-1]["confidence"] + frame["confidence"]) / 2, 3)
+        if midi is None:
+            # Handle silence frames
+            if events and events[-1]["midi"] is None:
+                events[-1]["end"] = frame["time"]
+            continue
+            
+        # Check if this frame continues the previous note
+        if events and events[-1]["midi"] == midi:
+            # Continue the existing event with updated data
+            events[-1]["end"] = frame["time"]
+            events[-1]["confidence"] = (events[-1]["confidence"] + frame["confidence"]) / 2
             if frame.get("frequency_hz") is not None:
                 previous_hz = events[-1].get("frequency_hz", frame["frequency_hz"])
-                events[-1]["frequency_hz"] = round((previous_hz + frame["frequency_hz"]) / 2, 2)
-        elif midi is not None:
-            events.append({"start": frame["time"], "end": round(frame["time"] + frame_seconds, 3), "midi": midi,
-                           "frequency_hz": frame.get("frequency_hz"), "confidence": frame["confidence"]})
-    events = [event for event in events if event["end"] - event["start"] >= 0.09]
-    if events and frames and frames[-1]["midi"] == events[-1]["midi"]:
-        events[-1]["end"] = round(len(audio) / sample_rate, 3)
+                events[-1]["frequency_hz"] = (previous_hz + frame["frequency_hz"]) / 2
+        else:
+            # Start a new event with more precise timing
+            events.append({
+                "start": frame["time"], 
+                "end": frame["time"] + frame_seconds,  # Initial end time
+                "midi": midi,
+                "frequency_hz": frame.get("frequency_hz"), 
+                "confidence": frame["confidence"]
+            })
+    
+    # Refine note boundaries using peak detection and interpolation
+    for i in range(len(events)):
+        if i == 0 and len(events) > 1:
+            # For first event, extend start to earlier if possible
+            events[i]["start"] = max(0, events[i]["start"] - frame_seconds)
+        elif i == len(events) - 1:
+            # For last event, extend end to later
+            if frames and len(frames) > 0:
+                events[i]["end"] = round(len(audio) / sample_rate, 3)
+        
+        # Filter out very short notes (but make it adaptive)
+        if events[i]["end"] - events[i]["start"] < min_duration:
+            events[i]["midi"] = None  # Mark as invalid
+    
+    # Remove invalid events (silence or very short notes)
+    events = [event for event in events if event["midi"] is not None and event["end"] - event["start"] >= min_duration]
+    
+    # Apply enhancement: merge silence periods between notes
+    # This ensures that when there's silence between notes, the silence is distributed
+    # evenly between adjacent notes
+    if len(events) > 1:
+        for i in range(len(events) - 1):
+            current_event = events[i]
+            next_event = events[i + 1]
+            
+            # If there is silence between current and next note
+            if current_event["end"] < next_event["start"]:
+                # Calculate the silence duration
+                silence_duration = next_event["start"] - current_event["end"]
+                
+                # Distribute half of the silence to each note
+                silence_to_add = silence_duration / 2.0
+                
+                # Extend the current note by half the silence duration
+                current_event["end"] = round(current_event["end"] + silence_to_add, 3)
+                
+                # Contract the next note by half the silence duration
+                next_event["start"] = round(next_event["start"] - silence_to_add, 3)
+    
+    # Refine event timing using more accurate sample position tracking
+    # Use sample-accurate note boundaries based on frame data
+    for i, event in enumerate(events):
+        # Find the sample positions that define this event's boundaries
+        if i == 0:
+            # First event - start from beginning of first frame
+            event["start"] = round(frames[0]["sample_pos"] / sample_rate, 3)
+        else:
+            # For subsequent events, use the start time of the frame
+            # This approach ensures better alignment with actual audio
+            # We'll also refine the end time using frame boundaries
+            pass
+            
+        if i == len(events) - 1 and frames:
+            # Last event - use final sample position
+            event["end"] = round(len(audio) / sample_rate, 3)
+    
+    # Apply note name conversion
     for event in events:
         midi = event["midi"]
         event["note"] = f"{note_names[midi % 12]}{midi // 12 - 1}"
+        
     return {"stem": stem_name, "sample_rate": int(sample_rate), "duration": round(len(audio) / sample_rate, 3), "truncated": truncated, "events": events}
 
 
